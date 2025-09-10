@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Camera + Upload Widget — Demo</title>
+
+</head>
+
+<body>
+
+
+</body>
+<script>
+    /* CameraUploadWidget — single-file JS widget (inject into page). */
+    (function () {
+        if (window.CameraUploadWidget) return; // don't double-init
+
+        window.CameraUploadWidget = {
+            init,
+            openCamera, // programmatic control
+            openPicker,
+        };
+
+        // Default configuration
+        const DEFAULTS = {
+            allow: 'both', // 'image' | 'video' | 'both'
+            enableAudio: true, // for video recording
+            facingMode: 'environment', // 'environment' | 'user'
+            maxVideoSeconds: 30, // max duration for recording (seconds)
+            uploadUrl: null, // if null => simulate upload. Otherwise POST to this URL (FormData 'file')
+            containerId: 'camera-upload-widget-container',
+            labels: {
+                title: 'Camera Upload',
+                camera: 'Camera',
+                record: 'Record Video',
+                choose: 'Choose File',
+                upload: 'Upload',
+                retake: 'Retake',
+                stop: 'Stop',
+            }
+        };
+
+        // Internal state
+        let cfg = {};
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let recordingTimer = null;
+        let currentBlob = null;
+        let currentFilename = null;
+        let widgetRoot = null;
+        let modalMode = 'image'; // 'image' | 'video' — current modal behavior
+        let recordingTicker = null; // interval id for per-second UI update
+        let recordingStartTs = null; // timestamp when recording started
+
+        /* ---------- PUBLIC API ---------- */
+        function init(userConfig = {}) {
+            cfg = Object.assign({}, DEFAULTS, userConfig || {});
+            mountWidget();
+        }
+
+        function openCamera(mode = undefined) {
+            // mode overrides cfg.allow for this action
+            const m = mode || cfg.allow;
+            if (m === 'image') openCameraForImage();
+            else if (m === 'video') openCameraForVideo();
+            else openCameraForImage(); // prefer image when both
+        }
+
+        function openPicker() {
+            if (!widgetRoot) return;
+            const input = widgetRoot.querySelector('input[type=file]');
+            if (input) {
+                input.value = '';
+                input.click();
+            }
+        }
+
+        /* ---------- DOM + UI ---------- */
+        function mountWidget() {
+            // prevent duplicate
+            if (document.getElementById(cfg.containerId)) return;
+
+            // styles
+            const style = document.createElement('style');
+            style.textContent = `
+            body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#151a26}
+    #${cfg.containerId}{position:relative;right:18px;bottom:18px;width:360px;max-width:96%;font-family:system-ui,Segoe UI,Roboto,Arial;z-index:999999}
+    #${cfg.containerId} .card{background:#0b1220;padding:12px;border-radius:10px;color:#e6eef6;box-shadow:0 8px 28px rgba(2,6,23,0.6)}
+    #${cfg.containerId} .row{display:flex;gap:8px;align-items:center}
+    #${cfg.containerId} button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
+    #${cfg.containerId} .primary{background:#0b84ff;color:#042;border:none;padding:8px 12px;border-radius:8px}
+    #${cfg.containerId} .preview{margin-top:10px;border-radius:8px;overflow:hidden;background:#061426;height:220px;display:flex;align-items:center;justify-content:center}
+    #${cfg.containerId} .preview img, #${cfg.containerId} .preview video{max-width:100%;max-height:100%;display:block}
+    #${cfg.containerId} progress{width:100%;height:12px;border-radius:8px}
+    #${cfg.containerId} .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:1000000}
+    #${cfg.containerId} .cameraCard{width:min(640px,96%);height:min(680px,86%);background:#071428;border-radius:12px;padding:10px;display:flex;flex-direction:column}
+    #${cfg.containerId} video.previewStream{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#000}
+    #${cfg.containerId} .flex{display:flex;gap:8px;align-items:center}
+    #${cfg.containerId} .muted{color:#9aa4b2;font-size:13px}
+    #${cfg.containerId} button.secondary{color:#fff}
+    /* Recording indicator overlay */
+#${cfg.containerId} .rec-indicator {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  display: inline-flex;
+  gap:8px;
+  align-items:center;
+  background: rgba(0,0,0,0.4);
+  padding: 6px 8px;
+  border-radius: 20px;
+  color: #fff;
+  font-weight:600;
+  font-size:13px;
+  z-index: 1002;
+  backdrop-filter: blur(4px);
+}
+#${cfg.containerId} .rec-dot {
+  width:10px;
+  height:10px;
+  background: #ff2d2d;
+  border-radius:50%;
+  box-shadow: 0 0 6px rgba(255,45,45,0.8);
+  transform-origin:center;
+  animation: recPulse 1.2s infinite;
+}
+@keyframes recPulse {
+  0% { transform: scale(1); opacity:1 }
+  50% { transform: scale(1.25); opacity:0.85 }
+  100% { transform: scale(1); opacity:1 }
+}
+#${cfg.containerId} .rec-timer { font-weight:600; font-size:13px; color:#fff; }
+
+`;
+            document.head.appendChild(style);
+
+            // root
+            widgetRoot = document.createElement('div');
+            widgetRoot.id = cfg.containerId;
+            widgetRoot.innerHTML = `
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div style="font-weight:600">${escapeHtml(cfg.labels.title)}</div>
+          <div class="muted" style="font-size:12px">Walr Internals</div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <div style="flex:1" class="flex">
+            <button data-action="camera">${escapeHtml(cfg.labels.camera)}</button>
+            <button data-action="record">${escapeHtml(cfg.labels.record)}</button>
+            <button data-action="choose">${escapeHtml(cfg.labels.choose)}</button>
+          </div>
+          <button class="primary" data-action="upload" disabled>${escapeHtml(cfg.labels.upload)}</button>
+        </div>
+        <div class="preview" id="${cfg.containerId}-preview">
+          <div class="muted">No selection</div>
+        </div>
+        <div style="margin-top:8px" class="muted small" id="${cfg.containerId}-status">Ready</div>
+      </div>
+
+      <input type="file" accept="${getAcceptString()}" style="display:none" />
+
+      <div class="modal" id="${cfg.containerId}-modal" role="dialog" aria-hidden="true">
+        <div class="cameraCard">
+          <video class="previewStream" autoplay playsinline muted></video>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <button data-action="capture" class="primary">${escapeHtml(cfg.labels.camera)}</button>
+            <button data-action="stop" class="secondary" style="display:none">${escapeHtml(cfg.labels.stop)}</button>
+            <button data-action="flip" class="secondary">Flip</button>
+            <div style="flex:1"></div>
+            <div class="muted" id="${cfg.containerId}-camstatus"></div>
+            <button data-action="close" class="secondary">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+            document.body.appendChild(widgetRoot);
+
+            wireEvents();
+        }
+
+        function getAcceptString() {
+            if (cfg.allow === 'image') return 'image/*';
+            if (cfg.allow === 'video') return 'video/*';
+            return 'image/*,video/*';
+        }
+
+        function wireEvents() {
+            const cameraBtn = widgetRoot.querySelector('button[data-action=camera]');
+            const recordBtn = widgetRoot.querySelector('button[data-action=record]');
+            const chooseBtn = widgetRoot.querySelector('button[data-action=choose]');
+            const uploadBtn = widgetRoot.querySelector('button[data-action=upload]');
+            const fileInput = widgetRoot.querySelector('input[type=file]');
+            const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+            const previewArea = widgetRoot.querySelector(`#${cfg.containerId}-preview`);
+            const modalVideo = widgetRoot.querySelector('video.previewStream');
+            const camStatus = widgetRoot.querySelector(`#${cfg.containerId}-camstatus`);
+
+            cameraBtn.addEventListener('click', () => openCameraForImage());
+            recordBtn.addEventListener('click', () => openCameraForVideo());
+            chooseBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+
+            fileInput.addEventListener('change', (ev) => {
+                const f = ev.target.files && ev.target.files[0];
+                if (!f) return;
+                currentBlob = f;
+                currentFilename = f.name;
+                renderPreviewFromBlob(f);
+                widgetRoot.querySelector('button[data-action=upload]').disabled = false;
+                setStatus('File ready: ' + f.type + ', ' + Math.round(f.size / 1024) + ' KB');
+            });
+
+            uploadBtn.addEventListener('click', async () => {
+                if (!currentBlob) return;
+                uploadBtn.disabled = true;
+                try {
+                    const res = await uploadBlob(currentBlob, currentFilename || generateFileName(currentBlob));
+                    setStatus('Upload finished' + (res && res.url ? (': ' + res.url) : ''));
+                } catch (err) {
+                    console.error(err);
+                    setStatus('Upload failed: ' + (err && err.message ? err.message : 'error'));
+                    alert('Upload failed: ' + (err && err.message ? err.message : 'error'));
+                } finally {
+                    uploadBtn.disabled = false;
+                }
+            });
+
+            // modal camera controls
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) closeCameraModal();
+            });
+            modal.querySelector('button[data-action=close]').addEventListener('click', closeCameraModal);
+            modal.querySelector('button[data-action=flip]').addEventListener('click', async () => {
+                // flip facing mode
+                cfg.facingMode = cfg.facingMode === 'environment' ? 'user' : 'environment';
+                await restartStream(modalVideo);
+            });
+            modal.querySelector('button[data-action=capture]').addEventListener('click', async () => {
+                if (!mediaStream) return;
+
+                // Decide behavior from modalMode (explicit), not cfg.allow or mediaRecorder presence
+                if (modalMode === 'video') {
+                    // In video modal — toggle start/stop recording
+                    if (!mediaRecorder) {
+                        startRecording(modalVideo, modal);
+                    } else {
+                        stopRecording();
+                    }
+                    return;
+                }
+
+                // Otherwise modalMode === 'image' -> perform image capture
+                const canvas = document.createElement('canvas');
+                canvas.width = modalVideo.videoWidth || cfg.desiredWidth || 1280;
+                canvas.height = modalVideo.videoHeight || cfg.desiredHeight || 720;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(modalVideo, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob((blob) => {
+                    if (!blob) return;
+                    currentBlob = blob;
+                    currentFilename = generateFileName(blob, 'jpg');
+                    renderPreviewFromBlob(blob, 'image');
+                    widgetRoot.querySelector('button[data-action=upload]').disabled = false;
+                    setStatus('Captured image');
+                    closeCameraModal();
+                }, 'image/jpeg', 0.92);
+            });
+
+
+            // For video recording stop button (shown dynamically)
+            modal.querySelector('button[data-action=stop]').addEventListener('click', () => {
+                if (mediaRecorder) stopRecording();
+            });
+        }
+
+        /* ---------- Camera (image) ---------- */
+        async function openCameraForImage() {
+            modalMode = 'image';
+            if (!isSecureContext()) {
+                // fallback to file picker
+                setStatus('Secure context required for camera — opening file picker.');
+                openPicker();
+                return;
+            }
+            try {
+                const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+                showModal(modal);
+                await startStream(widgetRoot.querySelector('video.previewStream'), { video: { facingMode: { ideal: cfg.facingMode } } });
+                setStatus('Camera ready for image capture');
+                // ensure MediaRecorder not active for image mode
+                if (mediaRecorder) { mediaRecorder = null; recordedChunks = []; }
+                // show capture label
+                modal.querySelector('button[data-action=capture]').textContent = cfg.labels.camera;
+                modal.querySelector('button[data-action=stop]').style.display = 'none';
+            } catch (err) {
+                console.warn('openCameraForImage error', err);
+                setStatus('Camera not available. Opening file picker.');
+                openPicker();
+            }
+        }
+
+        /* ---------- Camera (video) ---------- */
+        async function openCameraForVideo() {
+            modalMode = 'video';
+            if (!isSecureContext()) {
+                setStatus('Secure context required for camera — opening file picker.');
+                openPicker();
+                return;
+            }
+            // if browser doesn't support MediaRecorder, fall back to file input since recording not possible
+            if (!('MediaRecorder' in window)) {
+                setStatus('Recording not supported in this browser — using file picker. (MediaRecorder missing)');
+                openPicker();
+                return;
+            }
+            try {
+                const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+                showModal(modal);
+                await startStream(widgetRoot.querySelector('video.previewStream'), { video: { facingMode: { ideal: cfg.facingMode } }, audio: cfg.enableAudio });
+                setStatus('Camera ready for video recording');
+                // prepare recording controls
+                const recordBtn = modal.querySelector('button[data-action=capture]');
+                const stopBtn = modal.querySelector('button[data-action=stop]');
+                recordBtn.textContent = 'Start Recording';
+                stopBtn.style.display = 'inline-block';
+                stopBtn.textContent = cfg.labels.stop;
+                // ensure recorder not active
+                mediaRecorder = null; recordedChunks = [];
+                // user starts by clicking Start Recording (capture button)
+                // startRecording will be invoked when user clicks the capture button
+            } catch (err) {
+                console.warn('openCameraForVideo error', err);
+                setStatus('Camera not available. Opening file picker.');
+                openPicker();
+            }
+        }
+
+        async function startRecording(modalVideo, modal) {
+            if (!mediaStream) {
+                setStatus('No media stream for recording');
+                return;
+            }
+            try {
+                recordedChunks = [];
+                mediaRecorder = new MediaRecorder(mediaStream, { mimeType: chooseSupportedMimeType() });
+                mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recordedChunks.push(ev.data); };
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: recordedChunks[0].type || 'video/webm' });
+                    currentBlob = blob;
+                    currentFilename = generateFileName(blob, 'webm');
+                    renderPreviewFromBlob(blob, 'video');
+                    widgetRoot.querySelector('button[data-action=upload]').disabled = false;
+                    setStatus('Recording ready');
+                };
+                mediaRecorder.start();
+                setStatus('Recording...');
+                startRecordingTicker();
+                // switch modal UI
+                modal.querySelector('button[data-action=capture]').textContent = 'Start Recording';
+                modal.querySelector('button[data-action=stop]').style.display = 'inline-block';
+
+                // auto-stop after maxVideoSeconds
+                if (cfg.maxVideoSeconds && cfg.maxVideoSeconds > 0) {
+                    recordingTimer = setTimeout(() => {
+                        if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+                    }, cfg.maxVideoSeconds * 1000);
+                }
+            } catch (err) {
+                console.error('startRecording failed', err);
+                setStatus('Recording start failed');
+                // fallback to picker
+                openPicker();
+            }
+        }
+
+        function stopRecording() {
+            if (!mediaRecorder) return;
+            try {
+                mediaRecorder.stop();
+            } catch (e) { console.warn(e); }
+            if (recordingTimer) { clearTimeout(recordingTimer); recordingTimer = null; }
+            stopRecordingTicker();
+            mediaRecorder = null;
+            // keep stream running so user can preview then explicitly close modal
+            setStatus('Recording stopped');
+            const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+            modal.querySelector('button[data-action=capture]').textContent = cfg.labels.camera;
+            modal.querySelector('button[data-action=stop]').style.display = 'none';
+            // Stop using the stream? we keep it until user closes or retakes
+            closeCameraModal(); // auto-close for simpler flow; you may change this behavior
+        }
+
+        /* ---------- Stream helpers ---------- */
+        function formatTime(sec) {
+        sec = Math.max(0, Math.floor(sec));
+        const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+        const ss = String(sec % 60).padStart(2, '0');
+        return `${mm}:${ss}`;
+        }
+
+        function createRecordingIndicator() {
+        // ensure container exists
+        const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+        if (!modal) return null;
+        // avoid double-add
+        let el = modal.querySelector('.rec-indicator');
+        if (el) return el;
+        // create indicator
+        el = document.createElement('div');
+        el.className = 'rec-indicator';
+        el.style.position = 'absolute';
+        el.style.left = '12px';
+        el.style.top = '10px';
+
+        const dot = document.createElement('span');
+        dot.className = 'rec-dot';
+        el.appendChild(dot);
+
+        const text = document.createElement('span');
+        text.className = 'rec-timer';
+        text.textContent = 'REC 00:00';
+        el.appendChild(text);
+
+        // attach to modal cameraCard (positioning requires relative parent)
+        const cameraCard = modal.querySelector('.cameraCard') || modal.firstElementChild;
+        cameraCard.style.position = cameraCard.style.position || 'relative';
+        cameraCard.appendChild(el);
+        return el;
+        }
+
+        function startRecordingTicker() {
+        stopRecordingTicker(); // safety
+        const indicator = createRecordingIndicator();
+        if (!indicator) return;
+        const timerText = indicator.querySelector('.rec-timer');
+        recordingStartTs = Date.now();
+        // compute remaining based on cfg.maxVideoSeconds (if provided)
+        const maxSec = (cfg.maxVideoSeconds && Number(cfg.maxVideoSeconds) > 0) ? Number(cfg.maxVideoSeconds) : null;
+
+        function tick() {
+            const elapsed = Math.floor((Date.now() - recordingStartTs) / 1000);
+            if (maxSec) {
+            const remaining = Math.max(0, maxSec - elapsed);
+            timerText.textContent = `REC ${formatTime(elapsed)} / ${formatTime(maxSec)}${remaining === 0 ? ' (ending)' : ''}`;
+            } else {
+            timerText.textContent = `REC ${formatTime(elapsed)}`;
+            }
+        }
+        tick(); // initial update
+        recordingTicker = setInterval(tick, 1000);
+        }
+
+        function stopRecordingTicker() {
+        if (recordingTicker) {
+            clearInterval(recordingTicker);
+            recordingTicker = null;
+        }
+        recordingStartTs = null;
+        // hide/remove indicator
+        const modal = widgetRoot && widgetRoot.querySelector ? widgetRoot.querySelector(`#${cfg.containerId}-modal`) : null;
+        if (!modal) return;
+        const el = modal.querySelector('.rec-indicator');
+        if (el) el.remove();
+        }
+
+        async function startStream(videoEl, constraints = {}) {
+            await stopMedia(); // clean any existing
+            try {
+                const merged = Object.assign({}, constraints);
+                // ensure basic video exists
+                if (!merged.video) merged.video = { facingMode: { ideal: cfg.facingMode } };
+                mediaStream = await navigator.mediaDevices.getUserMedia(merged);
+                videoEl.srcObject = mediaStream;
+                await videoEl.play().catch(() => { });
+            } catch (err) {
+                throw err;
+            }
+        }
+
+        async function restartStream(videoEl) {
+            try {
+                await startStream(videoEl, { video: { facingMode: { ideal: cfg.facingMode } }, audio: cfg.enableAudio });
+            } catch (err) {
+                console.warn('restartStream failed', err);
+            }
+        }
+
+        function stopMedia() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = null;
+            }
+            return Promise.resolve();
+        }
+
+        function closeCameraModal() {
+            const modal = widgetRoot.querySelector(`#${cfg.containerId}-modal`);
+            modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
+            // stop tracks
+            stopMedia();
+            stopRecordingTicker(); // ensure UI cleared
+        }
+
+        function showModal(modal) {
+            modal.style.display = 'flex';
+            modal.setAttribute('aria-hidden', 'false');
+        }
+
+        /* ---------- Preview & util ---------- */
+        function renderPreviewFromBlob(blob, hint) {
+            const preview = widgetRoot.querySelector(`#${cfg.containerId}-preview`);
+            preview.innerHTML = '';
+            if (!blob) {
+                preview.innerHTML = '<div class="muted">No selection</div>';
+                return;
+            }
+            if (!hint) {
+                if (blob.type && blob.type.indexOf('video') === 0) hint = 'video';
+                else if (blob.type && blob.type.indexOf('image') === 0) hint = 'image';
+                else hint = 'image';
+            }
+            if (hint === 'image') {
+                const url = URL.createObjectURL(blob);
+                const img = document.createElement('img');
+                img.src = url;
+                img.onload = () => URL.revokeObjectURL(url);
+                preview.appendChild(img);
+            } else {
+                const url = URL.createObjectURL(blob);
+                const vid = document.createElement('video');
+                vid.src = url;
+                vid.controls = true;
+                vid.loop = false;
+                vid.onloadedmetadata = () => URL.revokeObjectURL(url);
+                preview.appendChild(vid);
+            }
+        }
+
+        function setStatus(text) {
+            const s = widgetRoot.querySelector(`#${cfg.containerId}-status`);
+            if (s) s.textContent = text;
+            else console.log('STATUS:', text);
+        }
+
+        function generateFileName(blob, extGuess) {
+            const t = new Date().toISOString().replace(/[:.]/g, '-');
+            const ext = extGuess || (blob && blob.type && blob.type.split('/')[1]) || 'bin';
+            return `capture_${t}.${ext}`;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+        }
+
+        function isSecureContext() {
+            return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
+        }
+
+        /* ---------- Upload (XHR with progress) ---------- */
+        function chooseSupportedMimeType() {
+            const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+            for (const t of types) {
+                try { if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t; } catch (e) { }
+            }
+            return '';
+        }
+
+        async function uploadBlob(blob, filename) {
+            if (!cfg.uploadUrl) {
+                // simulate progress
+                return simulateUpload(blob, filename);
+            }
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const fd = new FormData();
+                const file = (blob instanceof File) ? blob : new File([blob], filename || generateFileName(blob), { type: blob.type || 'application/octet-stream' });
+                fd.append('file', file);
+                xhr.open('POST', cfg.uploadUrl, true);
+                const statusEl = widgetRoot.querySelector(`#${cfg.containerId}-status`);
+                const progressEl = document.createElement('progress');
+                progressEl.max = 1; progressEl.value = 0;
+                statusEl.parentNode.insertBefore(progressEl, statusEl.nextSibling);
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) progressEl.value = e.loaded / e.total;
+                    setStatus('Uploading ' + Math.round((e.loaded / (e.total || 1)) * 100) + '%');
+                };
+                xhr.onload = () => {
+                    progressEl.remove();
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        let json = null;
+                        try { json = JSON.parse(xhr.responseText); } catch (e) { }
+                        resolve(json || { ok: true, raw: xhr.responseText, url: (xhr.getResponseHeader('Location') || null) });
+                    } else {
+                        reject(new Error('Upload failed: ' + xhr.status));
+                    }
+                };
+                xhr.onerror = (e) => {
+                    progressEl.remove();
+                    reject(e);
+                };
+                xhr.send(fd);
+            });
+        }
+
+        function simulateUpload(blob, filename) {
+            return new Promise((resolve) => {
+                setStatus('Simulating upload...');
+                const statusEl = widgetRoot.querySelector(`#${cfg.containerId}-status`);
+                const progressEl = document.createElement('progress');
+                progressEl.max = 1; progressEl.value = 0;
+                statusEl.parentNode.insertBefore(progressEl, statusEl.nextSibling);
+                let p = 0;
+                const id = setInterval(() => {
+                    p += Math.random() * 0.18;
+                    if (p >= 1) p = 1;
+                    progressEl.value = p;
+                    setStatus('Uploading ' + Math.round(p * 100) + '%');
+                    if (p >= 1) {
+                        clearInterval(id);
+                        setTimeout(() => {
+                            progressEl.remove();
+                            setStatus('Simulated upload complete');
+                            resolve({ ok: true, url: 'https://example.local/uploads/' + (filename || generateFileName(blob)) });
+                        }, 400);
+                    }
+                }, 200);
+            });
+        }
+
+        // expose methods on window for debugging
+        window.CameraUploadWidget = window.CameraUploadWidget || {};
+        // make sure init is available even if loaded earlier
+        // END of IIFE
+    })();
+
+    CameraUploadWidget.init({ allow: 'both', enableAudio: false, uploadUrl: null });
+
+</script>
+
+</html>
