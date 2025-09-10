@@ -87,99 +87,69 @@
             const style = document.createElement('style');
             style.textContent = `
             body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#151a26}
-    #${cfg.containerId}{position:relative;right:18px;bottom:18px;width:360px;max-width:96%;font-family:system-ui,Segoe UI,Roboto,Arial;z-index:999999}
-    #${cfg.containerId} .card{background:#0b1220;padding:12px;border-radius:10px;color:#e6eef6;box-shadow:0 8px 28px rgba(2,6,23,0.6)}
-    #${cfg.containerId} .row{display:flex;gap:8px;align-items:center}
-    #${cfg.containerId} button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
-    #${cfg.containerId} .primary{background:#0b84ff;color:#042;border:none;padding:8px 12px;border-radius:8px}
-    #${cfg.containerId} .preview{margin-top:10px;border-radius:8px;overflow:hidden;background:#061426;height:220px;display:flex;align-items:center;justify-content:center}
-    #${cfg.containerId} .preview img, #${cfg.containerId} .preview video{max-width:100%;max-height:100%;display:block}
-    #${cfg.containerId} progress{width:100%;height:12px;border-radius:8px}
-    #${cfg.containerId} .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:1000000}
-    #${cfg.containerId} .cameraCard{width:min(640px,96%);height:min(680px,86%);background:#071428;border-radius:12px;padding:10px;display:flex;flex-direction:column}
-    #${cfg.containerId} video.previewStream{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#000}
-    #${cfg.containerId} .flex{display:flex;gap:8px;align-items:center}
-    #${cfg.containerId} .muted{color:#9aa4b2;font-size:13px}
-    #${cfg.containerId} button.secondary{color:#fff}
-    /* Recording indicator overlay */
-#${cfg.containerId} .rec-indicator {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  display: inline-flex;
-  gap:8px;
-  align-items:center;
-  background: rgba(0,0,0,0.4);
-  padding: 6px 8px;
-  border-radius: 20px;
-  color: #fff;
-  font-weight:600;
-  font-size:13px;
-  z-index: 1002;
-  backdrop-filter: blur(4px);
-}
-#${cfg.containerId} .rec-dot {
-  width:10px;
-  height:10px;
-  background: #ff2d2d;
-  border-radius:50%;
-  box-shadow: 0 0 6px rgba(255,45,45,0.8);
-  transform-origin:center;
-  animation: recPulse 1.2s infinite;
-}
-@keyframes recPulse {
-  0% { transform: scale(1); opacity:1 }
-  50% { transform: scale(1.25); opacity:0.85 }
-  100% { transform: scale(1); opacity:1 }
-}
-#${cfg.containerId} .rec-timer { font-weight:600; font-size:13px; color:#fff; }
+            #${cfg.containerId}{position:relative;right:18px;bottom:18px;width:360px;max-width:96%;font-family:system-ui,Segoe UI,Roboto,Arial;z-index:999999}
+            #${cfg.containerId} .card{background:#0b1220;padding:12px;border-radius:10px;color:#e6eef6;box-shadow:0 8px 28px rgba(2,6,23,0.6)}
+            #${cfg.containerId} .row{display:flex;gap:8px;align-items:center}
+            #${cfg.containerId} button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
+            #${cfg.containerId} .primary{background:#0b84ff;color:#042;border:none;padding:8px 12px;border-radius:8px}
+            #${cfg.containerId} .preview{margin-top:10px;border-radius:8px;overflow:hidden;background:#061426;height:220px;display:flex;align-items:center;justify-content:center}
+            #${cfg.containerId} .preview img, #${cfg.containerId} .preview video{max-width:100%;max-height:100%;display:block}
+            #${cfg.containerId} progress{width:100%;height:12px;border-radius:8px}
+            #${cfg.containerId} .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:1000000}
+            #${cfg.containerId} .cameraCard{width:min(640px,96%);height:min(680px,86%);background:#071428;border-radius:12px;padding:10px;display:flex;flex-direction:column}
+            #${cfg.containerId} video.previewStream{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#000}
+            #${cfg.containerId} .flex{display:flex;gap:8px;align-items:center}
+            #${cfg.containerId} .muted{color:#9aa4b2;font-size:13px}
+            #${cfg.containerId} button.secondary{color:#fff}
+            #${cfg.containerId} .rec-indicator {position: absolute;top: 10px;left: 12px;display: inline-flex;gap:8px;align-items:center;background: rgba(0,0,0,0.4);padding: 6px 8px;border-radius: 20px;color: #fff;font-weight:600;font-size:13px;z-index: 1002;backdrop-filter: blur(4px);}
+            #${cfg.containerId} .rec-dot {width:10px;height:10px;background: #ff2d2d;border-radius:50%;box-shadow: 0 0 6px rgba(255,45,45,0.8);transform-origin:center;animation: recPulse 1.2s infinite;}
+            @keyframes recPulse {0% { transform: scale(1); opacity:1 }50% { transform: scale(1.25); opacity:0.85 }100% { transform: scale(1); opacity:1 }}
+            #${cfg.containerId} .rec-timer { font-weight:600; font-size:13px; color:#fff; }
+        `;
+    document.head.appendChild(style);
 
-`;
-            document.head.appendChild(style);
-
-            // root
-            widgetRoot = document.createElement('div');
-            widgetRoot.id = cfg.containerId;
-            widgetRoot.innerHTML = `
-      <div class="card">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <div style="font-weight:600">${escapeHtml(cfg.labels.title)}</div>
-          <div class="muted" style="font-size:12px">Walr Internals</div>
+    // root
+    widgetRoot = document.createElement('div');
+    widgetRoot.id = cfg.containerId;
+    widgetRoot.innerHTML = `
+        <div class="card">
+            <div class="row" style="justify-content:space-between;align-items:center">
+            <div style="font-weight:600">${escapeHtml(cfg.labels.title)}</div>
+            <div class="muted" style="font-size:12px">Walr Internals</div>
+            </div>
+            <div class="row" style="margin-top:10px">
+            <div style="flex:1" class="flex">
+                <button data-action="camera">${escapeHtml(cfg.labels.camera)}</button>
+                <button data-action="record">${escapeHtml(cfg.labels.record)}</button>
+                <button data-action="choose">${escapeHtml(cfg.labels.choose)}</button>
+            </div>
+            <button class="primary" data-action="upload" disabled>${escapeHtml(cfg.labels.upload)}</button>
+            </div>
+            <div class="preview" id="${cfg.containerId}-preview">
+            <div class="muted">No selection</div>
+            </div>
+            <div style="margin-top:8px" class="muted small" id="${cfg.containerId}-status">Ready</div>
         </div>
-        <div class="row" style="margin-top:10px">
-          <div style="flex:1" class="flex">
-            <button data-action="camera">${escapeHtml(cfg.labels.camera)}</button>
-            <button data-action="record">${escapeHtml(cfg.labels.record)}</button>
-            <button data-action="choose">${escapeHtml(cfg.labels.choose)}</button>
-          </div>
-          <button class="primary" data-action="upload" disabled>${escapeHtml(cfg.labels.upload)}</button>
-        </div>
-        <div class="preview" id="${cfg.containerId}-preview">
-          <div class="muted">No selection</div>
-        </div>
-        <div style="margin-top:8px" class="muted small" id="${cfg.containerId}-status">Ready</div>
-      </div>
 
-      <input type="file" accept="${getAcceptString()}" style="display:none" />
+        <input type="file" accept="${getAcceptString()}" style="display:none" />
 
-      <div class="modal" id="${cfg.containerId}-modal" role="dialog" aria-hidden="true">
-        <div class="cameraCard">
-          <video class="previewStream" autoplay playsinline muted></video>
-          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-            <button data-action="capture" class="primary">${escapeHtml(cfg.labels.camera)}</button>
-            <button data-action="stop" class="secondary" style="display:none">${escapeHtml(cfg.labels.stop)}</button>
-            <button data-action="flip" class="secondary">Flip</button>
-            <div style="flex:1"></div>
-            <div class="muted" id="${cfg.containerId}-camstatus"></div>
-            <button data-action="close" class="secondary">Close</button>
-          </div>
+        <div class="modal" id="${cfg.containerId}-modal" role="dialog" aria-hidden="true">
+            <div class="cameraCard">
+            <video class="previewStream" autoplay playsinline muted></video>
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+                <button data-action="capture" class="primary">${escapeHtml(cfg.labels.camera)}</button>
+                <button data-action="stop" class="secondary" style="display:none">${escapeHtml(cfg.labels.stop)}</button>
+                <button data-action="flip" class="secondary">Flip</button>
+                <div style="flex:1"></div>
+                <div class="muted" id="${cfg.containerId}-camstatus"></div>
+                <button data-action="close" class="secondary">Close</button>
+            </div>
+            </div>
         </div>
-      </div>
-    `;
-            document.body.appendChild(widgetRoot);
-
-            wireEvents();
-        }
+        `;
+        document.body.appendChild(widgetRoot);
+        wireEvents();
+    }
 
         function getAcceptString() {
             if (cfg.allow === 'image') return 'image/*';
