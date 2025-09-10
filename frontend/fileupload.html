@@ -547,6 +547,9 @@
                 const xhr = new XMLHttpRequest();
                 const fd = new FormData();
                 const file = (blob instanceof File) ? blob : new File([blob], filename || generateFileName(blob), { type: blob.type || 'application/octet-stream' });
+                fd.append('survey', 'mysurvey');
+                fd.append('user_id', 'user123');
+                // fd.append('file', fileBlob, fileName); // fileBlob is your Blob/File
                 fd.append('file', file);
                 xhr.open('POST', cfg.uploadUrl, true);
                 const statusEl = widgetRoot.querySelector(`#${cfg.containerId}-status`);
@@ -603,10 +606,9 @@
         // expose methods on window for debugging
         window.CameraUploadWidget = window.CameraUploadWidget || {};
         // make sure init is available even if loaded earlier
-        // END of IIFE
     })();
 
-    CameraUploadWidget.init({ allow: 'both', enableAudio: false, uploadUrl: null });
+    CameraUploadWidget.init({ allow: 'both', enableAudio: false, uploadUrl: "http://127.0.0.1:8000/upload" });
 
 </script>
 
