@@ -1,0 +1,44 @@
+name: Build & Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+          export_default_credentials: true
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE="gcr.io/${{ secrets.GCP_PROJECT }}/filetagapi:${{ github.sha }}"
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Deploy to Cloud Run
+        run: |
+          if [[ "${GITHUB_REF##*/}" == "main" ]]; then
+            SERVICE="filetagapi-prod"
+            ENVIRONMENT="prod"
+          else
+            SERVICE="filetagapi-dev"
+            ENVIRONMENT="dev"
+          fi
+          IMAGE="gcr.io/${{ secrets.GCP_PROJECT }}/filetagapi:${{ github.sha }}"
+          gcloud run deploy $SERVICE \
+            --image=$IMAGE \
+            --region=${{ secrets.GCP_REGION }} \
+            --platform=managed \
+            --allow-unauthenticated=false \
+            --set-env-vars=ENV=$ENVIRONMENT,USE_GCS=true,GCS_BUCKET=${{ secrets.GCS_BUCKET }} \
+            --quiet
