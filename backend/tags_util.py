@@ -53,10 +53,11 @@ def get_tags(relative_path: str):
     init_db()
     con = sqlite3_connect()
     cur = con.cursor()
-    cur.execute("SELECT tags FROM file_tags WHERE path = ?", (relative_path,))
+    cur.execute("SELECT tags FROM file_tags WHERE path = ? COLLATE NOCASE", (relative_path,))
     row = cur.fetchone()
     con.close()
     if not row:
+        print(f"No tags found for {relative_path}")
         return []
     import json
     return json.loads(row[0])

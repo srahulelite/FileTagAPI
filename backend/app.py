@@ -4,20 +4,36 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi import Request
-import aiofiles
-import re
+from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 from typing import List, Optional
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from PIL import Image
-from tags_util import add_random_tags_for_file
+from tags_util import add_random_tags_for_file, get_tags
+from fastapi.responses import FileResponse
+from fastapi import Header, Depends
+from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
+from fastapi import HTTPException, status
+from logs_util import log_event, init_logs_db
+import subprocess
+import secrets
+import aiofiles
+import re
 import io
-from fastapi.templating import Jinja2Templates
+import mimetypes
+
+
 
 
 app = FastAPI(title="Upload Service")
+
+# initialize auth DB (dev)
+auth_init_db()
+
+# intialize logs DB
+init_logs_db()
 
 # mount static + templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -37,7 +53,7 @@ BASE_UPLOAD_DIR = Path("uploads")
 BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB max (adjust if needed)
 ALLOWED_PREFIXES = ("image/", "video/")  # optional restriction; set to () to allow any
-VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v'}
+VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v', '.avi', '.flv', '.mkv'}
 
 # mount the uploads folder so files are served at /uploads/...
 app.mount("/uploads", StaticFiles(directory=str(BASE_UPLOAD_DIR)), name="uploads")
@@ -58,14 +74,79 @@ def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-# http://127.0.0.1:8000/upload
-@app.post("/upload")
+def verify_api_key(company: str, x_api_key: str = Header(...)):
+    """
+    Dependency: path param 'company' will be passed by FastAPI automatically.
+    Raises HTTPException if invalid or over quota.
+    """
+    rec = get_key_record(x_api_key)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    rec_company, rec_key, daily_limit = rec[0], rec[1], rec[2]
+    # ensure company matches key
+    if rec_company != company:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key not valid for company")
+    ok, count, limit = increment_usage_and_check(x_api_key)
+    if not ok:
+        raise HTTPException(status_code=429, detail=f"Daily quota exceeded ({count}/{limit})")
+    # optionally return usage info
+    return {"company": company, "api_key": x_api_key, "usage": {"today": count, "limit": limit}}
+
+
+def generate_api_key(nbytes: int = 24) -> str:
+    # produces URL-safe token, e.g. ~32 chars
+    return secrets.token_urlsafe(nbytes)
+
+# http://127.0.0.1:8000/register
+@app.get("/register", response_class=HTMLResponse)
+async def register_get(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
+
+# http://127.0.0.1:8000/register
+@app.post("/register", response_class=HTMLResponse)
+async def register_post(request: Request, company: str = Form(...)):
+    company_safe = secure_name(company)
+    # if already registered, return existing key
+    rec = get_key_record_for_company(company_safe) if 'get_key_record_for_company' in globals() else None
+    # Implement helper to look up by company
+    from auth import get_key_record
+    # search keys table for this company
+    con = None
+    import sqlite3
+    con = sqlite3.connect(str(Path("uploads") / "auth.db"))
+    cur = con.cursor()
+    cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
+    row = cur.fetchone()
+    if row:
+        api_key = row[0]
+        log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+    else:
+        api_key = generate_api_key()
+        create_api_key(company_safe, api_key, daily_limit=500)
+        log_event("INFO", "/register", "new_key_created", company=company_safe)
+    con.close()
+    # render result inline (simple page)
+    html = f"""
+    <!doctype html><html><body style='font-family:system-ui;padding:24px'>
+      <h3>Company: {company_safe}</h3>
+      <p><strong>API Key</strong>: <code>{api_key}</code></p>
+      <p>Use this key in header <code>X-API-Key</code> for requests to /api/v1/{company_safe}/...</p>
+      <p><a href="/api/v1/{company_safe}/surveys">Go to API (list)</a></p>
+    </body></html>
+    """
+    return HTMLResponse(html)
+
+# http://127.0.0.1:8000/api/v1/walr/surveys/survey123/upload
+@app.post("/api/v1/{company}/surveys/{survey}/upload")
 async def upload_file(
-    file: UploadFile = File(...),
-    survey: str = Form(...),
-    user_id: str = Form(...),
-    filename: Optional[str] = Form(None),
+    company: str,                          # path param (do NOT use Form here)
+    survey: str,                           # path param (do NOT use Form here)
+    file: UploadFile = File(...),          # file from multipart
+    user_id: str = Form(...),              # form field inside multipart
+    filename: Optional[str] = Form(None),  # optional form field
+    auth=Depends(verify_api_key),          # dependency (auth) uses company
 ):
+    
     """
     Minimal upload endpoint.
     Form fields:
@@ -94,13 +175,14 @@ async def upload_file(
     survey_safe = secure_name(survey)
     user_safe = secure_name(user_id)
     desired_name = secure_name(filename) if filename else secure_name(file.filename or "upload")
+    company_safe = secure_name(company)
     # ensure extension is present; if not, try to use subtype from content_type
     if "." not in desired_name and "/" in content_type:
         subtype = content_type.split("/")[-1]
         desired_name = f"{desired_name}.{subtype}"
 
     # create target dir and save file
-    target_dir = ensure_dir(BASE_UPLOAD_DIR / survey_safe)
+    target_dir = ensure_dir(BASE_UPLOAD_DIR / company_safe / survey_safe) 
     target_path = target_dir / f"{user_safe}_{desired_name}"
 
     # avoid accidental overwrite: if file exists, append an incrementing suffix
@@ -113,9 +195,10 @@ async def upload_file(
 
     async with aiofiles.open(target_path, "wb") as out_f:
         await out_f.write(contents)
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/upload", "file_uploaded", company=company_safe, survey=survey_safe, filename=target_path.name)
 
     # Optionally, add random tags for the uploaded file (for demo purposes)
-    relative_path = str(Path("uploads") / survey_safe / target_path.name)
+    relative_path = str(Path("uploads") / company_safe / survey_safe / target_path.name)
     add_random_tags_for_file(relative_path)
 
     resp = {
@@ -124,18 +207,20 @@ async def upload_file(
         "relative": relative_path,
         "filename": target_path.name,
         "size": size,
-        "content_type": content_type
+        "content_type": content_type,
     }
     return JSONResponse(resp)
 
 #http://127.0.0.1:8000/files/mysurvey
-@app.get("/files/{survey}")
-async def list_files_for_survey(
+#http://127.0.0.1:8000/api/v1/walr/surveys/Survey123/files
+@app.get("/api/v1/{company}/surveys/{survey}/files")
+async def files_json(
+    company: str,
     survey: str,
     request: Request,
     user_id: Optional[str] = None,
     limit: int = 100,
-    offset: int = 0
+    offset: int = 0,
 ):
     """
     List files under uploads/{survey}.
@@ -144,7 +229,9 @@ async def list_files_for_survey(
       - limit, offset: simple pagination
     """
     survey_safe = secure_name(survey)
-    target_dir = BASE_UPLOAD_DIR / survey_safe
+    company_safe = secure_name(company)
+    target_dir = BASE_UPLOAD_DIR / company_safe / survey_safe
+    log_event("INFO", "/api/v1/{company}/surveys/{survey}/files", "list_request", company=company_safe, survey=survey_safe)
 
     if not target_dir.exists() or not target_dir.is_dir():
         return []
@@ -169,78 +256,204 @@ async def list_files_for_survey(
         st = p.stat()
         # construct a download URL using the mounted 'uploads' route
         # path must be relative to the mount; join survey_safe & filename
-        rel_path = str(Path(survey_safe) / p.name)
+        rel_path = str(Path("uploads") / company_safe / survey_safe / p.name)
         try:
             download_url = request.url_for("uploads", path=rel_path)
         except Exception:
-            # fallback: construct absolute URL manually
             base = str(request.base_url).rstrip("/")
             download_url = f"{base}/uploads/{rel_path}"
         files_info.append({
             "filename": p.name,
             "size": st.st_size,
             "modified": datetime.fromtimestamp(st.st_mtime).isoformat(),
-            "relative": str(Path("uploads") / survey_safe / p.name),
-            "download_url": download_url
+            "relative": rel_path,
+            "download_url": download_url,
+            "tags" : get_tags(str(Path("uploads") / company_safe / survey_safe / p.name))
         })
 
     return files_info
 
-def optimize_image_and_cache(survey_safe: str, filename: str, width: int = 900):
-    """
-    - Reads uploads/{survey_safe}/{filename}
-    - Creates uploads/{survey_safe}/optimized/{filename} (JPEG or WebP)
-    - Returns the relative path to optimized file
-    """
+def _probe_video_width(path: Path):
+    """Return integer width (pixels) or None if probe fails."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width",
+            "-of", "csv=p=0",
+            str(path)
+        ]
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+        out = out.strip()
+        return int(out) if out else None
+    except Exception:
+        return None
 
-    src = BASE_UPLOAD_DIR / survey_safe / filename
+# def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str, target_img_width: int = 900, max_video_width: int = 1280, auth=Depends(verify_api_key)):
+#     """
+#     Optimize image OR video and cache result at:
+#       uploads/{survey_safe}/optimized/opt_{stem}.jpg  (images)
+#       uploads/{survey_safe}/optimized/opt_{stem}.mp4  (videos)
+
+#     Returns a download path (starting with /download/...), or raises RuntimeError/FileNotFoundError.
+#     """
+#     src = BASE_UPLOAD_DIR / company_safe / survey_safe / filename
+#     if not src.exists():
+#         raise FileNotFoundError("source not found")
+
+#     opt_dir = ensure_dir(BASE_UPLOAD_DIR / company_safe / survey_safe / "optimized")
+#     stem = src.stem
+#     ext = src.suffix.lower()
+
+#     # IMAGE
+#     if ext not in VIDEO_EXTS:
+#         out_name = f"opt_{stem}.jpg"
+#         out_path = opt_dir / out_name
+#         if out_path.exists():
+#             return f"/download/{survey_safe}/optimized/{out_name}"
+#         try:
+#             from PIL import Image
+#             with Image.open(src) as im:
+#                 im = im.convert("RGB")
+#                 w, h = im.size
+#                 if w > target_img_width:
+#                     new_h = int((target_img_width / w) * h)
+#                     im = im.resize((target_img_width, new_h), Image.LANCZOS)
+#                 im.save(out_path, format="JPEG", quality=78, optimize=True)
+#             return f"/download/{survey_safe}/optimized/{out_name}"
+#         except Exception as e:
+#             raise RuntimeError(f"image optimize failed: {e}")
+
+#     # VIDEO
+#     out_name = f"opt_{stem}.mp4"
+#     out_path = opt_dir / out_name
+#     if out_path.exists():
+#         return f"/download/{survey_safe}/optimized/{out_name}"
+
+#     # probe source width and decide scaling
+#     src_width = _probe_video_width(src)
+#     vf = None
+#     if src_width and src_width > max_video_width:
+#         # simple, safe scale (ensure even height with -2)
+#         vf = f"scale={max_video_width}:-2"
+
+#     ffmpeg_cmd = [
+#         "ffmpeg", "-y", "-i", str(src)
+#     ]
+#     if vf:
+#         ffmpeg_cmd += ["-vf", vf]
+#     # encode to widely compatible mp4/h264+aac
+#     ffmpeg_cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", str(out_path)]
+
+#     try:
+#         proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
+#         return f"/download/{survey_safe}/optimized/{out_name}"
+#     except FileNotFoundError:
+#         raise RuntimeError("ffmpeg not found on server. Install ffmpeg to enable video optimization.")
+#     except subprocess.CalledProcessError as e:
+#         stderr = (e.stderr or "")[:2000]
+#         raise RuntimeError(f"ffmpeg failed: {stderr}")
+
+# Correcting: remove FastAPI dependency from helper and make returned path include company
+def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str, target_img_width: int = 900, max_video_width: int = 1280):
+    """
+    Returns a path starting with 'uploads/...' pointing at the optimized file.
+    """
+    src = BASE_UPLOAD_DIR / company_safe / survey_safe / filename
     if not src.exists():
         raise FileNotFoundError("source not found")
 
-    opt_dir = ensure_dir(BASE_UPLOAD_DIR / survey_safe / "optimized")
-    # choose output name; keep extension .jpg (convert if needed)
-    out_name = f"opt_{Path(filename).stem}.jpg"
+    opt_dir = ensure_dir(BASE_UPLOAD_DIR / company_safe / survey_safe / "optimized")
+    stem = src.stem
+    ext = src.suffix.lower()
+
+    # IMAGE
+    if ext not in VIDEO_EXTS:
+        out_name = f"opt_{stem}.jpg"
+        out_path = opt_dir / out_name
+        if out_path.exists():
+            return str(Path("uploads") / company_safe / survey_safe / "optimized" / out_name)  # Correcting the path here
+        try:
+            from PIL import Image
+            with Image.open(src) as im:
+                im = im.convert("RGB")
+                w, h = im.size
+                if w > target_img_width:
+                    new_h = int((target_img_width / w) * h)
+                    im = im.resize((target_img_width, new_h), Image.LANCZOS)
+                im.save(out_path, format="JPEG", quality=78, optimize=True)
+            return str(Path("uploads") / company_safe / survey_safe / "optimized" / out_name)  # Correcting the path here
+        except Exception as e:
+            raise RuntimeError(f"image optimize failed: {e}")
+
+    # VIDEO
+    out_name = f"opt_{stem}.mp4"
     out_path = opt_dir / out_name
-
-    # if already exists, return quickly
     if out_path.exists():
-        return str(Path("uploads") / survey_safe / "optimized" / out_name)
+        return str(Path("uploads") / company_safe / survey_safe / "optimized" / out_name)  # Correcting the path here
 
-    # open and resize
-    with Image.open(src) as im:
-        im = im.convert("RGB")
-        # maintain aspect ratio
-        w, h = im.size
-        if w > width:
-            new_h = int((width / w) * h)
-            im = im.resize((width, new_h), Image.LANCZOS)
-        # save optimized
-        im.save(out_path, format="JPEG", quality=78, optimize=True)
-    return str(Path("uploads") / survey_safe / "optimized" / out_name)
+    # probe source width and decide scaling
+    src_width = _probe_video_width(src)
+    vf = None
+    if src_width and src_width > max_video_width:
+        # simple, safe scale (ensure even height with -2)
+        vf = f"scale={max_video_width}:-2"
+
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-i", str(src)
+    ]
+    if vf:
+        ffmpeg_cmd += ["-vf", vf]
+    ffmpeg_cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", str(out_path)]
+
+    try:
+        proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
+        return str(Path("uploads") / company_safe / survey_safe / "optimized" / out_name)  # Correcting the path here
+    except FileNotFoundError:
+        raise RuntimeError("ffmpeg not found on server. Install ffmpeg to enable video optimization.")
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "")[:2000]
+        raise RuntimeError(f"ffmpeg failed: {stderr}")
+
 
 
 #http://127.0.0.1:8000/optimize/mysurvey/filename.jpg
-@app.get("/optimize/{survey}/{filename}")
-async def optimize_endpoint(survey: str, filename: str):
+@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
+async def optimize_endpoint(company: str, survey: str, filename: str):
     survey_safe = secure_name(survey)
+    company_safe = secure_name(company)
     try:
-        rel = optimize_image_and_cache(survey_safe, filename)
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimize_request for {filename}", company=company_safe, survey=survey_safe, filename=filename)
+        download_path = optimize_media_and_cache(company_safe, survey_safe, filename)
+        # download_path is like "uploads/{company}/{survey}/optimized/opt_name"
+        if download_path.startswith("uploads"):
+            optimized_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/optimized/{Path(download_path).name}"
+        else:
+            optimized_url = download_path
     except FileNotFoundError:
+        log_event("WARN", "/api/v1/{company}/surveys/{survey}/optimize", "source_not_found", company=company_safe, survey=survey_safe, filename=filename)
         return JSONResponse({"ok": False, "error": "source file not found"}, status_code=404)
-    # return JSON with optimized relative path (served by static mount)
-    return {"ok": True, "optimized": rel}
+    except RuntimeError as e:
+        # return helpful message and 500 so frontend can show it
+        log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
+    return {"ok": True, "optimized": optimized_url}
+
+
 
 
 # Simple HTML view to list files for a survey with preview and actions
 #http://127.0.0.1:8000/files/mysurvey/list
-VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v'}
-
-@app.get("/files/{survey}/list", response_class=HTMLResponse)
-async def files_list_template(request: Request, survey: str):
+@app.get("/api/v1/{company}/surveys/{survey}/files/list", response_class=HTMLResponse)
+async def files_list_template(request: Request, company: str, survey: str):
     survey_safe = secure_name(survey)
-    target_dir = BASE_UPLOAD_DIR / survey_safe
+    company_safe = secure_name(company)
+
+    target_dir = BASE_UPLOAD_DIR / company_safe / survey_safe
+
     if not target_dir.exists():
-        return templates.TemplateResponse("files_list.html", {"request": request, "survey": survey_safe, "files": []})
+        return templates.TemplateResponse("files_list.html", {"request": request, "company": company_safe, "survey": survey_safe, "files": []})
 
     files = []
     for p in sorted(target_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -252,14 +465,13 @@ async def files_list_template(request: Request, survey: str):
         size_kb = round(p.stat().st_size / 1024, 1)
         modified = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         # download URL (served by static mount /uploads)
-        download_url = f"/uploads/{survey_safe}/{name}"
+        download_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/{name}"
         # optimized endpoint (on-demand)
-        optimize_url = f"/optimize/{survey_safe}/{name}"
+        optimize_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/optimize/{name}"
         preview_url = download_url  # for images use original; for video the video tag consumes this
         # tags (if any)
         try:
-            from tags_util import get_tags
-            tags = get_tags(str(Path("uploads") / survey_safe / name))
+            tags = get_tags(str(Path("uploads") / company_safe / survey_safe / name)) 
         except Exception:
             tags = []
         files.append({
@@ -272,6 +484,27 @@ async def files_list_template(request: Request, survey: str):
             "is_video": is_video,
             "tags": tags
         })
-    return templates.TemplateResponse("files_list.html", {"request": request, "survey": survey_safe, "files": files})
+    return templates.TemplateResponse("files_list.html", {"request": request, "company": company_safe, "survey": survey_safe, "files": files})
+
+@app.get("/api/v1/{company}/surveys/{survey}/download/{path:path}")
+async def download_file(company: str, survey: str, path: str):
+    
+    company_safe = secure_name(company)
+    survey_safe = secure_name(survey)
+    candidate = (BASE_UPLOAD_DIR / company_safe / survey_safe / Path(path)).resolve()
+    base_resolved = (BASE_UPLOAD_DIR / company_safe / survey_safe).resolve()
+    log_event("INFO", "/api/v1/{company}/surveys/{survey}/download", "download_request", company=company_safe, survey=survey_safe, filename=path)
+
+    if not str(candidate).startswith(str(base_resolved)):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    
+    mimetype, _ = mimetypes.guess_type(str(candidate))
+
+    log_event("INFO", "/api/v1/{company}/surveys/{survey}/download", "download_served", company=company_safe, survey=survey_safe, filename=path)
+    
+    return FileResponse(path=candidate, media_type=mimetype or "application/octet-stream",
+                        filename=candidate.name, headers={"Content-Disposition": f'attachment; filename="{candidate.name}"'})
 
 

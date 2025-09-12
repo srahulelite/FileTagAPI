@@ -10,7 +10,6 @@
 
 <body>
 
-
 </body>
 <script>
     /* CameraUploadWidget — single-file JS widget (inject into page). */
@@ -34,8 +33,8 @@
             labels: {
                 title: 'Camera Upload',
                 camera: 'Camera',
-                record: 'Record Video',
-                choose: 'Choose File',
+                record: 'Video',
+                choose: 'Browse',
                 upload: 'Upload',
                 retake: 'Retake',
                 stop: 'Stop',
@@ -119,8 +118,8 @@
             </div>
             <div class="row" style="margin-top:10px">
             <div style="flex:1" class="flex">
-                <button data-action="camera">${escapeHtml(cfg.labels.camera)}</button>
-                <button data-action="record">${escapeHtml(cfg.labels.record)}</button>
+                ${cfg.allow === 'video' ? '' : `<button data-action="camera">${escapeHtml(cfg.labels.camera)}</button>`}
+                ${cfg.allow === 'image' ? '' : `<button data-action="record">${escapeHtml(cfg.labels.record)}</button>`}
                 <button data-action="choose">${escapeHtml(cfg.labels.choose)}</button>
             </div>
             <button class="primary" data-action="upload" disabled>${escapeHtml(cfg.labels.upload)}</button>
@@ -552,6 +551,11 @@
                 // fd.append('file', fileBlob, fileName); // fileBlob is your Blob/File
                 fd.append('file', file);
                 xhr.open('POST', cfg.uploadUrl, true);
+                // set API key header if provided in config
+                if (cfg.apiKey) {
+                    // X-API-Key must be allowed by server CORS (you already allow headers="*")
+                    xhr.setRequestHeader('X-API-Key', cfg.apiKey);
+                }
                 const statusEl = widgetRoot.querySelector(`#${cfg.containerId}-status`);
                 const progressEl = document.createElement('progress');
                 progressEl.max = 1; progressEl.value = 0;
@@ -607,8 +611,16 @@
         window.CameraUploadWidget = window.CameraUploadWidget || {};
         // make sure init is available even if loaded earlier
     })();
+    const COMPANY = 'Walr';    // example company code (lowercase recommended)
+    const SURVEY = 'Survey123'; // survey id
+    const API_KEY = 'HHwEbXJwMHva8FLnJm6uPPaKtwdsT-FE'; // the key you received
 
-    CameraUploadWidget.init({ allow: 'both', enableAudio: false, uploadUrl: "http://127.0.0.1:8000/upload" });
+    CameraUploadWidget.init({
+        allow: 'both',
+        // new uploadUrl pointing to the API path (company + survey included)
+        uploadUrl: `http://127.0.0.1:8000/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+        apiKey: API_KEY, // pass key into widget config
+    });
 
 </script>
 
