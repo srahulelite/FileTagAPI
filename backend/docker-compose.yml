@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8080"
+    environment:
+      - PORT=8080
+      - ENV=dev
+    volumes:
+      - ./uploads:/app/uploads
+    command: uvicorn app:app --host 0.0.0.0 --port 8080 --reload
