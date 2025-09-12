@@ -1,7 +1,7 @@
 # app.py
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -23,8 +23,6 @@ import aiofiles
 import re
 import io
 import mimetypes
-
-
 
 
 app = FastAPI(title="Upload Service")
@@ -105,7 +103,7 @@ async def register_get(request: Request):
 # http://127.0.0.1:8000/register
 @app.post("/register", response_class=HTMLResponse)
 async def register_post(request: Request, company: str = Form(...)):
-    company_safe = secure_name(company)
+    company_safe = secure_name(company).lower()
     # if already registered, return existing key
     rec = get_key_record_for_company(company_safe) if 'get_key_record_for_company' in globals() else None
     # Implement helper to look up by company
@@ -172,10 +170,10 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=f"Unsupported content type: {content_type}")
 
     # sanitize names
-    survey_safe = secure_name(survey)
+    survey_safe = secure_name(survey).lower()
     user_safe = secure_name(user_id)
     desired_name = secure_name(filename) if filename else secure_name(file.filename or "upload")
-    company_safe = secure_name(company)
+    company_safe = secure_name(company).lower()
     # ensure extension is present; if not, try to use subtype from content_type
     if "." not in desired_name and "/" in content_type:
         subtype = content_type.split("/")[-1]
@@ -221,6 +219,7 @@ async def files_json(
     user_id: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    auth=Depends(verify_api_key)
 ):
     """
     List files under uploads/{survey}.
@@ -228,8 +227,8 @@ async def files_json(
       - user_id: filter by user prefix (user_safe_)
       - limit, offset: simple pagination
     """
-    survey_safe = secure_name(survey)
-    company_safe = secure_name(company)
+    survey_safe = secure_name(survey).lower()
+    company_safe = secure_name(company).lower()
     target_dir = BASE_UPLOAD_DIR / company_safe / survey_safe
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/files", "list_request", company=company_safe, survey=survey_safe)
 
@@ -420,8 +419,8 @@ def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str,
 #http://127.0.0.1:8000/optimize/mysurvey/filename.jpg
 @app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
 async def optimize_endpoint(company: str, survey: str, filename: str):
-    survey_safe = secure_name(survey)
-    company_safe = secure_name(company)
+    survey_safe = secure_name(survey).lower()
+    company_safe = secure_name(company).lower()
     try:
         log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimize_request for {filename}", company=company_safe, survey=survey_safe, filename=filename)
         download_path = optimize_media_and_cache(company_safe, survey_safe, filename)
@@ -444,11 +443,25 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
 
 
 # Simple HTML view to list files for a survey with preview and actions
-#http://127.0.0.1:8000/files/mysurvey/list
+#http://127.0.0.1:8000/api/v1/walr/surveys/Survey123/files/list
 @app.get("/api/v1/{company}/surveys/{survey}/files/list", response_class=HTMLResponse)
-async def files_list_template(request: Request, company: str, survey: str):
-    survey_safe = secure_name(survey)
-    company_safe = secure_name(company)
+async def files_list_template(
+    request: Request,
+    company: str,
+    survey: str,
+    api_key: str = Query(..., alias="api_key"),  # require api_key in URL
+):
+    survey_safe = secure_name(survey).lower()
+    company_safe = secure_name(company).lower()
+
+    # validate API key
+    rec = get_key_record(api_key)
+    if not rec:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    rec_company = secure_name(rec[0])
+    if rec_company != company_safe:
+        raise HTTPException(status_code=403, detail="API key not valid for this company")
 
     target_dir = BASE_UPLOAD_DIR / company_safe / survey_safe
 
@@ -489,8 +502,8 @@ async def files_list_template(request: Request, company: str, survey: str):
 @app.get("/api/v1/{company}/surveys/{survey}/download/{path:path}")
 async def download_file(company: str, survey: str, path: str):
     
-    company_safe = secure_name(company)
-    survey_safe = secure_name(survey)
+    company_safe = secure_name(company).lower()
+    survey_safe = secure_name(survey).lower()
     candidate = (BASE_UPLOAD_DIR / company_safe / survey_safe / Path(path)).resolve()
     base_resolved = (BASE_UPLOAD_DIR / company_safe / survey_safe).resolve()
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/download", "download_request", company=company_safe, survey=survey_safe, filename=path)

@@ -4,7 +4,165 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Camera + Upload Widget — Demo</title>
+    <title>Media Tag Widget</title>
+
+    <style>
+        body {
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            height:100vh;
+            margin:0;
+            background:#151a26;
+        }
+
+        #camera-upload-widget-container {
+            position:relative;
+            right:18px;
+            bottom:18px;
+            width:360px;
+            max-width:96%;
+            font-family:system-ui,Segoe UI,Roboto,Arial;
+            z-index:999999;
+        }
+
+        #camera-upload-widget-container .card {
+            background:#0b1220;
+            padding:12px;
+            border-radius:10px;
+            color:#e6eef6;
+            box-shadow:0 8px 28px rgba(2,6,23,0.6);
+        }
+
+        #camera-upload-widget-container .row {
+            display:flex;
+            gap:8px;
+            align-items:center;
+        }
+
+        #camera-upload-widget-container button {
+            background:transparent;
+            border:1px solid rgba(255,255,255,0.06);
+            padding:8px 10px;
+            border-radius:8px;
+            color:inherit;
+            cursor:pointer;
+        }
+
+        #camera-upload-widget-container .primary {
+            background:#0b84ff;
+            color:#042;
+            border:none;
+            padding:8px 12px;
+            border-radius:8px;
+        }
+
+        #camera-upload-widget-container .preview {
+            margin-top:10px;
+            border-radius:8px;
+            overflow:hidden;
+            background:#061426;
+            height:220px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+        }
+
+        #camera-upload-widget-container .preview img,
+        #camera-upload-widget-container .preview video {
+            max-width:100%;
+            max-height:100%;
+            display:block;
+        }
+
+        #camera-upload-widget-container progress {
+            width:100%;
+            height:12px;
+            border-radius:8px;
+        }
+
+        #camera-upload-widget-container .modal {
+            position:fixed;
+            inset:0;
+            display:none;
+            align-items:center;
+            justify-content:center;
+            background:rgba(0,0,0,0.6);
+            z-index:1000000;
+        }
+
+        #camera-upload-widget-container .cameraCard {
+            width:min(640px,96%);
+            height:min(680px,86%);
+            background:#071428;
+            border-radius:12px;
+            padding:10px;
+            display:flex;
+            flex-direction:column;
+        }
+
+        #camera-upload-widget-container video.previewStream {
+            width:100%;
+            height:100%;
+            object-fit:cover;
+            border-radius:8px;
+            background:#000;
+        }
+
+        #camera-upload-widget-container .flex {
+            display:flex;
+            gap:8px;
+            align-items:center;
+        }
+
+        #camera-upload-widget-container .muted {
+            color:#9aa4b2;
+            font-size:13px;
+        }
+
+        #camera-upload-widget-container button.secondary {
+            color:#fff;
+        }
+
+        #camera-upload-widget-container .rec-indicator {
+            position: absolute;
+            top: 10px;
+            left: 12px;
+            display: inline-flex;
+            gap:8px;
+            align-items:center;
+            background: rgba(0,0,0,0.4);
+            padding: 6px 8px;
+            border-radius: 20px;
+            color: #fff;
+            font-weight:600;
+            font-size:13px;
+            z-index: 1002;
+            backdrop-filter: blur(4px);
+        }
+
+        #camera-upload-widget-container .rec-dot {
+            width:10px;
+            height:10px;
+            background: #ff2d2d;
+            border-radius:50%;
+            box-shadow: 0 0 6px rgba(255,45,45,0.8);
+            transform-origin:center;
+            animation: recPulse 1.2s infinite;
+        }
+
+        @keyframes recPulse {
+            0%   { transform: scale(1); opacity:1 }
+            50%  { transform: scale(1.25); opacity:0.85 }
+            100% { transform: scale(1); opacity:1 }
+        }
+
+        #camera-upload-widget-container .rec-timer {
+            font-weight:600;
+            font-size:13px;
+            color:#fff;
+        }
+    </style>
 
 </head>
 
@@ -82,30 +240,6 @@
             // prevent duplicate
             if (document.getElementById(cfg.containerId)) return;
 
-            // styles
-            const style = document.createElement('style');
-            style.textContent = `
-            body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#151a26}
-            #${cfg.containerId}{position:relative;right:18px;bottom:18px;width:360px;max-width:96%;font-family:system-ui,Segoe UI,Roboto,Arial;z-index:999999}
-            #${cfg.containerId} .card{background:#0b1220;padding:12px;border-radius:10px;color:#e6eef6;box-shadow:0 8px 28px rgba(2,6,23,0.6)}
-            #${cfg.containerId} .row{display:flex;gap:8px;align-items:center}
-            #${cfg.containerId} button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
-            #${cfg.containerId} .primary{background:#0b84ff;color:#042;border:none;padding:8px 12px;border-radius:8px}
-            #${cfg.containerId} .preview{margin-top:10px;border-radius:8px;overflow:hidden;background:#061426;height:220px;display:flex;align-items:center;justify-content:center}
-            #${cfg.containerId} .preview img, #${cfg.containerId} .preview video{max-width:100%;max-height:100%;display:block}
-            #${cfg.containerId} progress{width:100%;height:12px;border-radius:8px}
-            #${cfg.containerId} .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:1000000}
-            #${cfg.containerId} .cameraCard{width:min(640px,96%);height:min(680px,86%);background:#071428;border-radius:12px;padding:10px;display:flex;flex-direction:column}
-            #${cfg.containerId} video.previewStream{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#000}
-            #${cfg.containerId} .flex{display:flex;gap:8px;align-items:center}
-            #${cfg.containerId} .muted{color:#9aa4b2;font-size:13px}
-            #${cfg.containerId} button.secondary{color:#fff}
-            #${cfg.containerId} .rec-indicator {position: absolute;top: 10px;left: 12px;display: inline-flex;gap:8px;align-items:center;background: rgba(0,0,0,0.4);padding: 6px 8px;border-radius: 20px;color: #fff;font-weight:600;font-size:13px;z-index: 1002;backdrop-filter: blur(4px);}
-            #${cfg.containerId} .rec-dot {width:10px;height:10px;background: #ff2d2d;border-radius:50%;box-shadow: 0 0 6px rgba(255,45,45,0.8);transform-origin:center;animation: recPulse 1.2s infinite;}
-            @keyframes recPulse {0% { transform: scale(1); opacity:1 }50% { transform: scale(1.25); opacity:0.85 }100% { transform: scale(1); opacity:1 }}
-            #${cfg.containerId} .rec-timer { font-weight:600; font-size:13px; color:#fff; }
-        `;
-    document.head.appendChild(style);
 
     // root
     widgetRoot = document.createElement('div');
@@ -316,12 +450,17 @@
                 mediaRecorder = new MediaRecorder(mediaStream, { mimeType: chooseSupportedMimeType() });
                 mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recordedChunks.push(ev.data); };
                 mediaRecorder.onstop = () => {
-                    const blob = new Blob(recordedChunks, { type: recordedChunks[0].type || 'video/webm' });
+                    // combine recorded chunks into a Blob
+                    const blob = new Blob(recordedChunks, { type: recordedChunks[0] && recordedChunks[0].type ? recordedChunks[0].type : 'video/webm' });
                     currentBlob = blob;
                     currentFilename = generateFileName(blob, 'webm');
+
+                    // Render preview (video) and enable upload button
                     renderPreviewFromBlob(blob, 'video');
-                    widgetRoot.querySelector('button[data-action=upload]').disabled = false;
+                    const uploadBtn = widgetRoot.querySelector('button[data-action=upload]');
+                    if (uploadBtn) uploadBtn.disabled = false;
                     setStatus('Recording ready');
+                    
                 };
                 mediaRecorder.start();
                 setStatus('Recording...');
@@ -479,9 +618,13 @@
         }
 
         /* ---------- Preview & util ---------- */
+        let _lastObjectUrl = null; // remember last object URL to revoke it
+
         function renderPreviewFromBlob(blob, hint) {
             const preview = widgetRoot.querySelector(`#${cfg.containerId}-preview`);
-            preview.innerHTML = '';
+            if (!preview) return;
+                preview.innerHTML = '';
+
             if (!blob) {
                 preview.innerHTML = '<div class="muted">No selection</div>';
                 return;
@@ -491,22 +634,122 @@
                 else if (blob.type && blob.type.indexOf('image') === 0) hint = 'image';
                 else hint = 'image';
             }
+
+            // revoke previous object URL to avoid leaks and conflicts
+            if (_lastObjectUrl) {
+                try { URL.revokeObjectURL(_lastObjectUrl); } catch (e) { /* ignore */ }
+                _lastObjectUrl = null;
+            }
+
             if (hint === 'image') {
                 const url = URL.createObjectURL(blob);
+                _lastObjectUrl = url;
                 const img = document.createElement('img');
                 img.src = url;
-                img.onload = () => URL.revokeObjectURL(url);
+                img.onload = () => { try { URL.revokeObjectURL(url); _lastObjectUrl = null; } catch(e){} };
+                img.style.maxWidth = '100%';
                 preview.appendChild(img);
-            } else {
-                const url = URL.createObjectURL(blob);
-                const vid = document.createElement('video');
-                vid.src = url;
-                vid.controls = true;
-                vid.loop = false;
-                vid.onloadedmetadata = () => URL.revokeObjectURL(url);
-                preview.appendChild(vid);
+                return;
             }
+
+            // hint === 'video'
+            const url = URL.createObjectURL(blob);
+            _lastObjectUrl = url;
+
+            const vid = document.createElement('video');
+            vid.src = url;
+            vid.controls = true;
+            vid.playsInline = true;         // critical for iOS to avoid fullscreen hijack
+            vid.preload = 'metadata';
+            vid.muted = true;               // allow autoplay in many browsers; we unmute only on user interaction
+            vid.style.maxWidth = '100%';
+            vid.style.maxHeight = '100%';
+
+            // add a small "play" overlay UX for touch devices (optional)
+            vid.addEventListener('click', () => {
+                // if currently paused, try to play (some browsers require user gesture)
+                if (vid.paused) {
+                vid.play().catch(()=>{ /* ignore - user can click controls */ });
+                }
+            });
+
+            // When metadata is loaded, ensure time and try play
+            vid.addEventListener('loadedmetadata', () => {
+                try {
+                // ensure start of playback is ready (some codecs need a tiny seek)
+                if (vid.duration > 0) {
+                    // set to a tiny epsilon to force frame decoding on some browsers
+                    try { vid.currentTime = 0.01; } catch (e) { /* ignore if not allowed */ }
+                }
+                } catch (e) { /* ignore */ }
+            });
+
+            // When the video can play, try to unmute if user already interacted; otherwise keep muted
+            vid.addEventListener('canplay', async () => {
+                // attempt autoplay; many browsers allow muted autoplay
+                try {
+                await vid.play();
+                // unmute only if the browser permits — do not force-unmute
+                // vid.muted = false; // don't unmute automatically
+                } catch (err) {
+                // autoplay blocked — user interaction will be required, but the controls are present
+                // no action needed
+                // console.debug('Autoplay blocked:', err);
+                }
+            });
+
+            // handle errors gracefully
+            vid.addEventListener('error', (e) => {
+                console.warn('Preview video error', e);
+                // fallback: show simple message and a download link so user can play locally
+                preview.innerHTML = '';
+                const a = document.createElement('a');
+                a.href = url;
+                a.textContent = 'Download recording to play locally';
+                a.download = currentFilename || 'recording.webm';
+                preview.appendChild(a);
+            });
+
+            preview.appendChild(vid);
+
+            // ensure the browser starts decoding: call load() then try play after a short tick.
+            try {
+                vid.load();
+                setTimeout(() => {
+                vid.play().catch(() => { /* autoplay blocked, user can click controls */ });
+                }, 50);
+            } catch (e) { /* ignore */ }
         }
+
+        
+        // function renderPreviewFromBlob(blob, hint) {
+        //     const preview = widgetRoot.querySelector(`#${cfg.containerId}-preview`);
+        //     preview.innerHTML = '';
+        //     if (!blob) {
+        //         preview.innerHTML = '<div class="muted">No selection</div>';
+        //         return;
+        //     }
+        //     if (!hint) {
+        //         if (blob.type && blob.type.indexOf('video') === 0) hint = 'video';
+        //         else if (blob.type && blob.type.indexOf('image') === 0) hint = 'image';
+        //         else hint = 'image';
+        //     }
+        //     if (hint === 'image') {
+        //         const url = URL.createObjectURL(blob);
+        //         const img = document.createElement('img');
+        //         img.src = url;
+        //         img.onload = () => URL.revokeObjectURL(url);
+        //         preview.appendChild(img);
+        //     } else {
+        //         const url = URL.createObjectURL(blob);
+        //         const vid = document.createElement('video');
+        //         vid.src = url;
+        //         vid.controls = true;
+        //         vid.loop = false;
+        //         vid.onloadedmetadata = () => URL.revokeObjectURL(url);
+        //         preview.appendChild(vid);
+        //     }
+        // }
 
         function setStatus(text) {
             const s = widgetRoot.querySelector(`#${cfg.containerId}-status`);
@@ -611,12 +854,13 @@
         window.CameraUploadWidget = window.CameraUploadWidget || {};
         // make sure init is available even if loaded earlier
     })();
-    const COMPANY = 'Walr';    // example company code (lowercase recommended)
-    const SURVEY = 'Survey123'; // survey id
-    const API_KEY = 'HHwEbXJwMHva8FLnJm6uPPaKtwdsT-FE'; // the key you received
+    const COMPANY = 'acuity';    // example company code (lowercase recommended)
+    const SURVEY = 'Testsurvey123'; // survey id
+    const API_KEY = '7N0mxOB8JfpxemS4HfxaMyazjLjzzkI5'; // the key you received
 
     CameraUploadWidget.init({
         allow: 'both',
+        audio: true,
         // new uploadUrl pointing to the API path (company + survey included)
         uploadUrl: `http://127.0.0.1:8000/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
         apiKey: API_KEY, // pass key into widget config
