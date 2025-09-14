@@ -162,6 +162,12 @@
             font-size:13px;
             color:#fff;
         }
+        #camera-upload-widget-container button:disabled, #camera-upload-widget-container button[disabled] {
+            opacity:0.5;
+            cursor:not-allowed;
+            pointer-events: none;
+            color:white
+        }
     </style>
 
 </head>
@@ -317,18 +323,33 @@
 
             uploadBtn.addEventListener('click', async () => {
                 if (!currentBlob) return;
+                // Disable immediately and show uploading text
                 uploadBtn.disabled = true;
+                const prevLabel = uploadBtn.textContent;
+                uploadBtn.textContent = 'Uploading...';
+                setStatus('Uploading...');
+
                 try {
                     const res = await uploadBlob(currentBlob, currentFilename || generateFileName(currentBlob));
+                    // Success: clear preview and keep upload disabled until a new file is chosen
                     setStatus('Upload finished' + (res && res.url ? (': ' + res.url) : ''));
+                    // Optionally show returned URL for debugging
+                    if (res && res.url) {
+                        // you can attach logic to show a link or copy-to-clipboard if needed
+                        // e.g. setStatus('Upload finished: ' + res.url);
+                    }
+                    // reset state to initial (preview blank, upload disabled)
+                    resetWidgetToIdle();
                 } catch (err) {
                     console.error(err);
                     setStatus('Upload failed: ' + (err && err.message ? err.message : 'error'));
                     alert('Upload failed: ' + (err && err.message ? err.message : 'error'));
-                } finally {
+                    // Re-enable so user can retry (preserve file selection and preview so they can try again)
                     uploadBtn.disabled = false;
+                    uploadBtn.textContent = prevLabel || escapeHtml(cfg.labels.upload);
                 }
             });
+
 
             // modal camera controls
             modal.addEventListener('click', (e) => {
@@ -769,6 +790,29 @@
 
         function isSecureContext() {
             return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
+        }
+
+        function resetWidgetToIdle() {
+            // clear selected blob + filename
+            currentBlob = null;
+            currentFilename = null;
+
+            // revoke any object URL and clear _lastObjectUrl
+            if (_lastObjectUrl) {
+                try { URL.revokeObjectURL(_lastObjectUrl); } catch (e) { /* ignore */ }
+                _lastObjectUrl = null;
+            }
+
+            // clear preview
+            const preview = widgetRoot.querySelector(`#${cfg.containerId}-preview`);
+            if (preview) preview.innerHTML = '<div class="muted">No selection</div>';
+
+            // disable upload button until user picks another file
+            const uploadBtn = widgetRoot.querySelector('button[data-action=upload]');
+            if (uploadBtn) {
+                uploadBtn.disabled = true;
+                uploadBtn.textContent = escapeHtml(cfg.labels.upload); // reset label
+            }
         }
 
         /* ---------- Upload (XHR with progress) ---------- */
