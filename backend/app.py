@@ -17,6 +17,7 @@ from fastapi import Header, Depends
 from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
 from fastapi import HTTPException, status
 from logs_util import log_event, init_logs_db
+from fastapi.responses import TemplateResponse
 import subprocess
 import secrets
 import aiofiles
@@ -117,35 +118,67 @@ async def register_get(request: Request):
 @app.post("/register", response_class=HTMLResponse)
 async def register_post(request: Request, company: str = Form(...)):
     company_safe = secure_name(company).lower()
-    # if already registered, return existing key
-    rec = get_key_record_for_company(company_safe) if 'get_key_record_for_company' in globals() else None
-    # Implement helper to look up by company
-    from auth import get_key_record
-    # search keys table for this company
-    con = None
-    import sqlite3
-    con = sqlite3.connect(str(DB_DIR / "auth.db"))
-    cur = con.cursor()
-    cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
-    row = cur.fetchone()
-    if row:
-        api_key = row[0]
-        log_event("INFO", "/register", "existing_key_returned", company=company_safe)
-    else:
-        api_key = generate_api_key()
-        create_api_key(company_safe, api_key, daily_limit=500)
-        log_event("INFO", "/register", "new_key_created", company=company_safe)
-    con.close()
-    # render result inline (simple page)
-    html = f"""
-    <!doctype html><html><body style='font-family:system-ui;padding:24px'>
-      <h3>Company: {company_safe}</h3>
-      <p><strong>API Key</strong>: <code>{api_key}</code></p>
-      <p>Use this key in header <code>X-API-Key</code> for requests to /api/v1/{company_safe}/...</p>
-      <p><a href="/api/v1/{company_safe}/surveys">Go to API (list)</a></p>
-    </body></html>
-    """
-    return HTMLResponse(html)
+
+    # Prefer using auth helpers if present
+    # try to use get_key_record_for_company() if auth exposes it
+    api_key = None
+    try:
+        # if auth module exposes helper, use it:
+        from auth import get_key_record_for_company, create_api_key  # optional
+        rec = None
+        try:
+            rec = get_key_record_for_company(company_safe)
+        except Exception:
+            rec = None
+        if rec:
+            api_key = rec
+            log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+        else:
+            api_key = generate_api_key()
+            create_api_key(company_safe, api_key, daily_limit=500)
+            log_event("INFO", "/register", "new_key_created", company=company_safe)
+    except Exception:
+        # fallback to raw sqlite access (backwards-compatible)
+        import sqlite3
+        con = sqlite3.connect(str(DB_DIR / "auth.db"))
+        cur = con.cursor()
+        cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
+        row = cur.fetchone()
+        if row:
+            api_key = row[0]
+            log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+        else:
+            api_key = generate_api_key()
+            # try to use create_api_key, else insert raw
+            try:
+                create_api_key(company_safe, api_key, daily_limit=500)
+            except Exception:
+                cur.execute("INSERT INTO api_keys (company, api_key, daily_limit) VALUES (?, ?, ?)",
+                            (company_safe, api_key, 500))
+                con.commit()
+            log_event("INFO", "/register", "new_key_created", company=company_safe)
+        con.close()
+
+    # Build base URLs from request.base_url (keeps http/https and host)
+    base = str(request.base_url).rstrip("/")  # e.g. "http://127.0.0.1:8000" or dev URL
+
+    # Example endpoints for this API key
+    examples = {
+        "register_get": f"{base}/register",
+        "files_list_html": f"{base}/api/v1/{company_safe}/surveys/Survey123/files/list?api_key={api_key}",
+        "files_json": f"{base}/api/v1/{company_safe}/surveys/Survey123/files",
+        "upload": f"{base}/api/v1/{company_safe}/surveys/Survey123/upload",
+        "download": f"{base}/api/v1/{company_safe}/surveys/Survey123/download/user1_image.jpg",
+        "optimize": f"{base}/api/v1/{company_safe}/surveys/Survey123/optimize/user1_image.jpg",
+    }
+
+    return templates.TemplateResponse("register_result.html", {
+        "request": request,
+        "company": company_safe,
+        "api_key": api_key,
+        "examples": examples,
+        "base_url": base
+    })
 
 # http://127.0.0.1:8000/api/v1/walr/surveys/survey123/upload
 @app.post("/api/v1/{company}/surveys/{survey}/upload")
