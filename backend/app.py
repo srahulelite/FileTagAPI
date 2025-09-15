@@ -17,7 +17,6 @@ from fastapi import Header, Depends
 from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
 from fastapi import HTTPException, status
 from logs_util import log_event, init_logs_db
-from fastapi.responses import TemplateResponse
 import subprocess
 import secrets
 import aiofiles
