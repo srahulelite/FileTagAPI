@@ -28,6 +28,12 @@ from storage_adapter import save_file_bytes, save_file_from_path, get_signed_url
 from google.cloud import storage
 from typing import List
 
+from pathlib import Path
+
+# ensure DB directory is used for sqlite files (persisted via volume)
+DB_DIR = Path("db")
+DB_DIR.mkdir(parents=True, exist_ok=True)
+
 # (optional) read env locally
 GCS_ENABLED = USE_GCS
 
@@ -118,7 +124,7 @@ async def register_post(request: Request, company: str = Form(...)):
     # search keys table for this company
     con = None
     import sqlite3
-    con = sqlite3.connect(str(Path("uploads") / "auth.db"))
+    con = sqlite3.connect(str(DB_DIR / "auth.db"))
     cur = con.cursor()
     cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
     row = cur.fetchone()
