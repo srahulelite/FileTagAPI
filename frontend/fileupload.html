@@ -906,7 +906,9 @@
         allow: 'both',
         audio: true,
         // new uploadUrl pointing to the API path (company + survey included)
-        uploadUrl: `https://filetagapi-dev-24717612698.asia-south1.run.app/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+        // uploadUrl: `https://filetagapi-dev-24717612698.asia-south1.run.app/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+        uploadUrl: `http://127.0.0.1:8000/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+
         apiKey: API_KEY, // pass key into widget config
     });
 

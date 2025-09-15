@@ -210,3 +210,5 @@ __marimo__/
 #key
 gha-key.json
 /backend/key.json
+# local GCP key
+/backend/filetagapi-sa.json
