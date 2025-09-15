@@ -37,17 +37,7 @@ jobs:
       - name: Configure Docker to use gcloud credentials for Artifact Registry (asia-south1)
         run: |
           echo "=== GCloud active account ==="
-          gcloud auth list --filter=status:ACTIVE --format="value(account)"
-          echo "=== GCloud project ==="
-          gcloud config get-value project || true
-          echo "=== truncated access token (for debug only) ==="
-          gcloud auth print-access-token | head -c 60 || true
-          echo
-          echo "=== configure docker for asia-south1-docker.pkg.dev ==="
           gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
-          echo "=== check docker config helper for host (best-effort) ==="
-          # JQ may not exist on runner; ignore failure
-          cat ~/.docker/config.json 2>/dev/null | jq -r '.credHelpers["asia-south1-docker.pkg.dev"]' || true
 
       - name: Build Docker image (backend)
         run: |
