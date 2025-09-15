@@ -1,27 +1,12 @@
 version: "3.8"
-
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     ports:
-      - "8000:8080"                       # host:container
+      - "8000:8080"
     environment:
-      PORT: "8080"
-      ENV: "prod"
-      GCS_ENABLED: "true"                 # enable GCS mode
-      GCS_BUCKET: "filetagapi-uploads-filetagapi-prod"
-      # If you use a mounted JSON key (less recommended), uncomment next line:
-      # GOOGLE_APPLICATION_CREDENTIALS: "/secrets/gcp/key.json"
+      - PORT=8080
+      - ENV=dev
     volumes:
-      - /srv/filetagapi/uploads:/app/uploads   # persistent uploads and DBs (matches your code)
-      # optional secret mount (uncomment if you use JSON key)
-      # - /srv/filetagapi/secrets/key.json:/secrets/gcp/key.json:ro
-    restart: unless-stopped
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/healthz || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      - ./uploads:/app/uploads
+    command: uvicorn app:app --host 0.0.0.0 --port 8080 --reload

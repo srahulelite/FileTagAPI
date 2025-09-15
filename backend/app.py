@@ -31,7 +31,7 @@ from typing import List
 from pathlib import Path
 
 # ensure DB directory is used for sqlite files (persisted via volume)
-DB_DIR = Path("db")
+DB_DIR = Path("uploads")
 DB_DIR.mkdir(parents=True, exist_ok=True)
 
 # (optional) read env locally
