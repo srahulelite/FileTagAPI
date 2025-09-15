@@ -71,7 +71,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account=filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
-            --set-env-vars="ENV=${ENVIRONMENT},GCS_ENABLED=true,GCS_BUCKET=${BUCKET}" \
+            --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET}" \
             --quiet
 
       - name: Output Cloud Run URL
