@@ -66,6 +66,25 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB max (adjust if needed)
 ALLOWED_PREFIXES = ("image/", "video/")  # optional restriction; set to () to allow any
 VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v', '.avi', '.flv', '.mkv'}
 
+
+
+
+
+
+
+
+import logging, os
+logger = logging.getLogger("filetagapi")
+logging.basicConfig(level=logging.INFO)
+
+# Log startup env snapshot
+logger.info("STARTUP: USE_GCS (env)=%s GCS_BUCKET=%s GOOGLE_APPLICATION_CREDENTIALS=%s CWD=%s",
+            os.getenv("USE_GCS"), os.getenv("GCS_BUCKET"), os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.getcwd())
+
+
+
+
+
 # mount the uploads folder so files are served at /uploads/...
 app.mount("/uploads", StaticFiles(directory=str(BASE_UPLOAD_DIR)), name="uploads")
 
@@ -201,6 +220,23 @@ async def upload_file(
     # Basic sanity checks
     if not survey or not user_id:
         raise HTTPException(status_code=400, detail="survey and user_id are required")
+    
+
+
+
+
+    logger.info("UPLOAD_REQUEST: company=%s survey=%s user_id=%s filename_field=%s content_type=%s", 
+                company, survey, user_id, filename, file.content_type)
+
+    # show GCS mode as seen by storage_adapter
+    try:
+        import storage_adapter
+        logger.info("STORAGE ADAPTER: USE_GCS=%s GCS_BUCKET=%s", getattr(storage_adapter, "USE_GCS", None), getattr(storage_adapter, "GCS_BUCKET", None))
+    except Exception as e:
+        logger.exception("storage_adapter import failed: %s", e)
+
+
+
 
     # Read file into memory chunk-by-chunk to check size and then write to disk
     contents = await file.read()
