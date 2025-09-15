@@ -78,14 +78,20 @@ from pathlib import Path
 from datetime import timedelta
 from typing import Optional
 
+import os
+
+def _env_true_any(*names, default="false"):
+    for n in names:
+        v = os.getenv(n)
+        if v is not None:
+            return str(v).strip().lower() in ("1","true","yes","on")
+    return str(default).strip().lower() in ("1","true","yes","on")
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-def _env_true(name: str, default: str = "") -> bool:
-    v = os.getenv(name, default)
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
-
-USE_GCS = _env_true("USE_GCS", "false")
+# Accept either USE_GCS or the older GCS_ENABLED flag
+USE_GCS = _env_true_any("USE_GCS", "GCS_ENABLED", default="false")
 GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
 
 # Lazy holders
