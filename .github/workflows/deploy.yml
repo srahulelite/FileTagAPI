@@ -25,7 +25,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # (optional) Install gcloud CLI (setup-gcloud will still be helpful for region/project)
+      # (optional) Install gcloud CLI (setup-gcloud will still be helpful for region/project).
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
