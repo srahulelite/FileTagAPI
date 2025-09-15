@@ -40,7 +40,7 @@ jobs:
       - name: Build Docker image (backend)
         run: |
           cd backend
-          IMAGE="gcr.io/${{ secrets.GCP_PROJECT }}/filetagapi:${{ github.sha }}"
+          IMAGE="asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/filetagapi-repo/filetagapi:${{ github.sha }}"
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
