@@ -19,7 +19,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Authenticate to GCP using the service account JSON stored in secrets.GCP_SA_KEY
+      # Authenticate to GCP using the service account JSON stored in secrets.GCP_SA_KEY.
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v1
         with:
