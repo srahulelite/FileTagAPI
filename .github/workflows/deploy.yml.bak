@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   build-and-deploy:
-    # environment: 'production' for main, otherwise 'dev' (env gating handled in repo settings)
     environment: ${{ contains(github.ref, 'refs/heads/main') && 'production' || 'dev' }}
     runs-on: ubuntu-latest
     steps:
@@ -20,34 +19,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Authenticate to GCP using the service account JSON stored in secrets.GCP_SA_KEY
+      # Authenticate to GCP using the service account JSON stored in secrets.GCP_SA_KEY.
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v1
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # Install gcloud CLI (no unsupported inputs)
+      # (optional) Install gcloud CLI (setup-gcloud will still be helpful for region/project).
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT }}
           install_components: 'gke-gcloud-auth-plugin'
+          export_default_credentials: true
 
-      # DEBUG + Explicitly configure docker credential helper for Artifact Registry host
-      - name: Configure Docker to use gcloud credentials for Artifact Registry (asia-south1)
+      - name: Configure Docker to use gcloud credentials for gcr.io
         run: |
-          echo "=== GCloud active account ==="
-          gcloud auth list --filter=status:ACTIVE --format="value(account)"
-          echo "=== GCloud project ==="
-          gcloud config get-value project || true
-          echo "=== truncated access token (for debug only) ==="
-          gcloud auth print-access-token | head -c 60 || true
-          echo
-          echo "=== configure docker for asia-south1-docker.pkg.dev ==="
-          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
-          echo "=== check docker config helper for host (best-effort) ==="
-          # JQ may not exist on runner; ignore failure
-          cat ~/.docker/config.json 2>/dev/null | jq -r '.credHelpers["asia-south1-docker.pkg.dev"]' || true
+          gcloud auth configure-docker --quiet
 
       - name: Build Docker image (backend)
         run: |
@@ -56,10 +44,10 @@ jobs:
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      - name: Push Docker image to Artifact Registry
+      - name: Push Docker image to GCR
         run: |
           cd backend
-          docker push "${{ env.IMAGE }}"
+          docker push "$IMAGE"
 
       - name: Deploy to Cloud Run
         env:
