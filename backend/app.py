@@ -710,8 +710,8 @@ def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str,
 
 
 #http://127.0.0.1:8000/optimize/mysurvey/filename.jpg
-@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
-async def optimize_endpoint(company: str, survey: str, filename: str):
+# @app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
+# async def optimize_endpoint(company: str, survey: str, filename: str):
     survey_safe = secure_name(survey).lower()
     company_safe = secure_name(company).lower()
     try:
@@ -747,6 +747,107 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
     return {"ok": True, "optimized": optimized_url}
 
+@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
+async def optimize_endpoint(company: str, survey: str, filename: str):
+    survey_safe = secure_name(survey).lower()
+    company_safe = secure_name(company).lower()
+
+    try:
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimize_request for {filename}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        # call the worker which may return:
+        # - a signed URL (http/https) OR
+        # - "gs://bucket/path/opt_..." OR
+        # - "uploads/..." (local path) OR
+        # - "/api/v1/.../download/..." (relative path)
+        download_path = optimize_media_and_cache(company_safe, survey_safe, filename)
+
+        # Defensive: log what the helper returned (very helpful to debug)
+        log_event("DEBUG", "/api/v1/{company}/surveys/{survey}/optimize",
+                  f"optimize returned raw download_path: {download_path}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        optimized_url = None
+
+        # Normalize types and values to a final URL string the client can consume:
+        if isinstance(download_path, dict):
+            # If helper accidentally returned a dict, try common keys
+            optimized_url = download_path.get("optimized") or download_path.get("url") or download_path.get("download_url")
+        elif isinstance(download_path, str):
+            dp = download_path.strip()
+            if dp.startswith("http://") or dp.startswith("https://"):
+                optimized_url = dp
+            elif dp.startswith("gs://"):
+                # convert gs://... to signed URL via your adapter
+                # gs://bucket/company/survey/optimized/opt_name
+                try:
+                    # extract filename and object prefix
+                    # we expect object path is after gs://<bucket>/
+                    _parts = dp.split("/", 3)
+                    # dp = "gs://bucket/path/..."
+                    if len(_parts) >= 4:
+                        # object path = parts[3]
+                        obj_path = _parts[3]
+                        # assume object path = {company}/{survey}/optimized/{opt_name}
+                        # extract last segment as filename
+                        opt_name = Path(obj_path).name
+                        # get signed URL via your adapter
+                        optimized_url = get_signed_url(company_safe, survey_safe + "/optimized", opt_name)
+                    else:
+                        # fallback: attempt to return the raw gs:// path
+                        optimized_url = dp
+                except Exception as e:
+                    log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize",
+                              f"failed to convert gs:// path to signed url: {e}",
+                              company=company_safe, survey=survey_safe, filename=filename)
+                    optimized_url = dp  # keep as fallback
+            elif dp.startswith("uploads") or dp.startswith("/uploads") or dp.startswith("download/") or dp.startswith("/api/v1"):
+                # If it's a local uploads path or API download path, expose a proper relative URL for client
+                # If it starts with "uploads/..." convert to download endpoint
+                if dp.startswith("uploads"):
+                    # dp -> uploads/{company}/{survey}/optimized/opt_name
+                    name = Path(dp).name
+                    optimized_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/optimized/{name}"
+                elif dp.startswith("/uploads"):
+                    name = Path(dp).name
+                    optimized_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/optimized/{name}"
+                elif dp.startswith("download/") or dp.startswith("/api/v1"):
+                    # dp already looks like an API download path; make absolute if necessary
+                    optimized_url = dp if dp.startswith("/") else f"/{dp}"
+                else:
+                    optimized_url = dp
+            else:
+                # unknown string form - return as-is and log
+                optimized_url = dp
+        else:
+            # unexpected return type
+            optimized_url = None
+
+        # Final logging for clarity
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize",
+                  f"optimize_ready download_path={download_path} optimized_url={optimized_url}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        if not optimized_url:
+            # return explicit JSON so client sees consistent structure
+            log_event("WARN", "/api/v1/{company}/surveys/{survey}/optimize",
+                      "optimize produced no optimized URL", company=company_safe, survey=survey_safe, filename=filename)
+            return JSONResponse({"ok": False, "error": "optimize produced no url", "raw": str(download_path)}, status_code=500)
+
+        # If it's a gs:// fallback that couldn't be converted, the client will fail later; we prefer to return something
+        return JSONResponse({"ok": True, "optimized": optimized_url})
+
+    except FileNotFoundError:
+        log_event("WARN", "/api/v1/{company}/surveys/{survey}/optimize", "source_not_found", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": "source file not found"}, status_code=404)
+    except RuntimeError as e:
+        log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    except Exception as e:
+        # catch-all to avoid returning HTML pages or unstructured responses
+        log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"unexpected_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": "unexpected error", "detail": str(e)}, status_code=500)
 
 
 # Simple HTML view to list files for a survey with preview and actions
