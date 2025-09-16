@@ -742,10 +742,10 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
         # return helpful message and 500 so frontend can show it
         log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        
+    if optimized_url.startswith("http"):
+        return RedirectResponse(url=optimized_url, status_code=302)    
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
     return {"ok": True, "optimized": optimized_url}
-
 
 
 
@@ -921,12 +921,17 @@ async def download_file(company: str, survey: str, path: str):
             # Desired filename in Content-Disposition (use actual file name)
             filename_only = Path(path).name
 
+            # prefer using blob.content_type when available (fall back to generic)
+            resp_type = blob.content_type if getattr(blob, "content_type", None) else "application/octet-stream"
+
+
             # Generate a V4 signed URL with Content-Disposition forcing download
             signed_url = blob.generate_signed_url(
                 version="v4",
                 expiration=timedelta(minutes=15),
                 method="GET",
-                response_disposition=f'attachment; filename="{filename_only}"'
+                response_disposition=f'attachment; filename="{filename_only}"',
+                response_type=resp_type
             )
 
             # Redirect client to the signed URL so the browser downloads the file
