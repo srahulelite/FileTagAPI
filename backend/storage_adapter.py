@@ -3,12 +3,12 @@
 # # - save_file_bytes(company, survey, filename, bytes_data) -> returns stored path (local path or gs://...).
 # # - get_signed_url(company, survey, filename, expires_seconds=3600) -> returns URL to download (signed URL for GCS, local API download path otherwise).
 
-# import os
-# from pathlib import Path
-# from datetime import timedelta
+import os
+from pathlib import Path
+from datetime import timedelta
 
-# USE_GCS = os.getenv("USE_GCS", "false").lower() == "true"
-# GCS_BUCKET = os.getenv("GCS_BUCKET", "")
+USE_GCS = os.getenv("USE_GCS", "false").lower() == "true"
+GCS_BUCKET = os.getenv("GCS_BUCKET", "")
 
 # if USE_GCS:
 #     try:
