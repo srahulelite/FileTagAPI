@@ -997,6 +997,7 @@ async def files_list_template(
 #     return FileResponse(path=candidate, media_type=mimetype or "application/octet-stream",
 #                         filename=candidate.name, headers={"Content-Disposition": f'attachment; filename="{candidate.name}"'})
 
+
 @app.get("/api/v1/{company}/surveys/{survey}/download/{path:path}")
 async def download_file(company: str, survey: str, path: str):
     company_safe = secure_name(company).lower()
@@ -1012,37 +1013,84 @@ async def download_file(company: str, survey: str, path: str):
             raise HTTPException(status_code=500, detail="Server misconfigured")
 
         try:
-            client = gcs_storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(object_path)
-
-            if not blob.exists():
-                raise HTTPException(status_code=404, detail="file not found")
-
-            # Desired filename in Content-Disposition (use actual file name)
-            filename_only = Path(path).name
-
-            # prefer using blob.content_type when available (fall back to generic)
-            resp_type = blob.content_type if getattr(blob, "content_type", None) else "application/octet-stream"
-
-
-            # Generate a V4 signed URL with Content-Disposition forcing download
-            signed_url = blob.generate_signed_url(
-                version="v4",
-                expiration=timedelta(minutes=15),
-                method="GET",
-                response_disposition=f'attachment; filename="{filename_only}"',
-                response_type=resp_type
-            )
-
-            # Redirect client to the signed URL so the browser downloads the file
-            return RedirectResponse(url=signed_url, status_code=302)
+            # Prefer storage_adapter.get_signed_url which already implements ADC + fallback logic
+            # and will use the GCP_SA_KEY fallback if ADC cannot sign.
+            # storage_adapter.get_signed_url returns a string URL (or raises).
+            try:
+                signed_url = get_signed_url(company_safe, survey_safe, Path(path).name)
+                log_event("INFO", "download_file", f"redirecting to signed URL via storage_adapter", company=company_safe, survey=survey_safe, filename=path)
+                return RedirectResponse(url=signed_url, status_code=302)
+            except Exception as sign_err:
+                # Log the signing failure and attempt a diagnostic flow using google client directly, but keep it as a fallback.
+                logger.exception("storage_adapter.get_signed_url failed, falling back to direct client attempt: %s", sign_err)
+                # FALLBACK: try direct client -> useful for debugging but not necessary for normal operation
+                client = gcs_storage.Client()
+                bucket = client.bucket(bucket_name)
+                blob = bucket.blob(object_path)
+                if not blob.exists():
+                    raise HTTPException(status_code=404, detail="file not found")
+                # attempt to generate a v4 signed url directly (may fail if ADC lacks private key)
+                signed_url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(minutes=15),
+                    method="GET",
+                    response_disposition=f'attachment; filename="{Path(path).name}"',
+                    response_type=blob.content_type or "application/octet-stream"
+                )
+                log_event("WARN", "download_file", "direct-gcs-signed-url-generated-as-fallback", company=company_safe, survey=survey_safe, filename=path)
+                return RedirectResponse(url=signed_url, status_code=302)
 
         except HTTPException:
+            # re-raise FastAPI HTTPExceptions (404 etc)
             raise
         except Exception as e:
+            # very verbose logging for debugging (include stacktrace)
+            logger.exception("Failed to generate/download file for %s/%s/%s: %s", company_safe, survey_safe, path, e)
             log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
-            raise HTTPException(status_code=500, detail="Failed to generate download URL")
+            # Return structured JSON in dev to help frontend debugging (avoid returning HTML stack traces)
+            return JSONResponse({"ok": False, "error": "Failed to generate download URL", "detail": str(e)}, status_code=500)
+
+
+    # if GCS_ENABLED:
+    #     # Build object name: support nested paths like "optimized/opt_name" or plain filename
+    #     object_path = f"{company_safe}/{survey_safe}/{path.lstrip('/')}"
+    #     bucket_name = os.getenv("GCS_BUCKET")
+    #     if not bucket_name:
+    #         log_event("ERROR", "download_file", "no_gcs_bucket_configured")
+    #         raise HTTPException(status_code=500, detail="Server misconfigured")
+
+    #     try:
+    #         client = gcs_storage.Client()
+    #         bucket = client.bucket(bucket_name)
+    #         blob = bucket.blob(object_path)
+
+    #         if not blob.exists():
+    #             raise HTTPException(status_code=404, detail="file not found")
+
+    #         # Desired filename in Content-Disposition (use actual file name)
+    #         filename_only = Path(path).name
+
+    #         # prefer using blob.content_type when available (fall back to generic)
+    #         resp_type = blob.content_type if getattr(blob, "content_type", None) else "application/octet-stream"
+
+
+    #         # Generate a V4 signed URL with Content-Disposition forcing download
+    #         signed_url = blob.generate_signed_url(
+    #             version="v4",
+    #             expiration=timedelta(minutes=15),
+    #             method="GET",
+    #             response_disposition=f'attachment; filename="{filename_only}"',
+    #             response_type=resp_type
+    #         )
+
+    #         # Redirect client to the signed URL so the browser downloads the file
+    #         return RedirectResponse(url=signed_url, status_code=302)
+
+    #     except HTTPException:
+    #         raise
+    #     except Exception as e:
+    #         log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
+    #         raise HTTPException(status_code=500, detail="Failed to generate download URL")
 
     # -----------------------
     # LOCAL MODE (unchanged, still returns FileResponse with attachment header)
