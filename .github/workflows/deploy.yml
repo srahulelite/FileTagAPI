@@ -45,6 +45,7 @@ jobs:
             http://127.0.0.1:8000
             http://localhost:8000
             https://filetagapi-dev-24717612698.asia-south1.run.app
+            https://filetagapi-dev-4zslrnt5kq-el.a.run.app
             # Uncomment/add your production origin if needed:
             # https://filetagapi-prod-XXXXXXXXXX.a.run.app
         run: |
