@@ -28,6 +28,12 @@ from storage_adapter import save_file_bytes, save_file_from_path, get_signed_url
 from google.cloud import storage
 from typing import List
 
+from pathlib import Path
+
+# ensure DB directory is used for sqlite files (persisted via volume)
+DB_DIR = Path("uploads")
+DB_DIR.mkdir(parents=True, exist_ok=True)
+
 # (optional) read env locally
 GCS_ENABLED = USE_GCS
 
@@ -59,6 +65,25 @@ BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB max (adjust if needed)
 ALLOWED_PREFIXES = ("image/", "video/")  # optional restriction; set to () to allow any
 VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v', '.avi', '.flv', '.mkv'}
+
+
+
+
+
+
+
+
+import logging, os
+logger = logging.getLogger("filetagapi")
+logging.basicConfig(level=logging.INFO)
+
+# Log startup env snapshot
+logger.info("STARTUP: USE_GCS (env)=%s GCS_BUCKET=%s GOOGLE_APPLICATION_CREDENTIALS=%s CWD=%s",
+            os.getenv("USE_GCS"), os.getenv("GCS_BUCKET"), os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.getcwd())
+
+
+
+
 
 # mount the uploads folder so files are served at /uploads/...
 app.mount("/uploads", StaticFiles(directory=str(BASE_UPLOAD_DIR)), name="uploads")
@@ -111,35 +136,67 @@ async def register_get(request: Request):
 @app.post("/register", response_class=HTMLResponse)
 async def register_post(request: Request, company: str = Form(...)):
     company_safe = secure_name(company).lower()
-    # if already registered, return existing key
-    rec = get_key_record_for_company(company_safe) if 'get_key_record_for_company' in globals() else None
-    # Implement helper to look up by company
-    from auth import get_key_record
-    # search keys table for this company
-    con = None
-    import sqlite3
-    con = sqlite3.connect(str(Path("uploads") / "auth.db"))
-    cur = con.cursor()
-    cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
-    row = cur.fetchone()
-    if row:
-        api_key = row[0]
-        log_event("INFO", "/register", "existing_key_returned", company=company_safe)
-    else:
-        api_key = generate_api_key()
-        create_api_key(company_safe, api_key, daily_limit=500)
-        log_event("INFO", "/register", "new_key_created", company=company_safe)
-    con.close()
-    # render result inline (simple page)
-    html = f"""
-    <!doctype html><html><body style='font-family:system-ui;padding:24px'>
-      <h3>Company: {company_safe}</h3>
-      <p><strong>API Key</strong>: <code>{api_key}</code></p>
-      <p>Use this key in header <code>X-API-Key</code> for requests to /api/v1/{company_safe}/...</p>
-      <p><a href="/api/v1/{company_safe}/surveys">Go to API (list)</a></p>
-    </body></html>
-    """
-    return HTMLResponse(html)
+
+    # Prefer using auth helpers if present
+    # try to use get_key_record_for_company() if auth exposes it
+    api_key = None
+    try:
+        # if auth module exposes helper, use it:
+        from auth import get_key_record_for_company, create_api_key  # optional
+        rec = None
+        try:
+            rec = get_key_record_for_company(company_safe)
+        except Exception:
+            rec = None
+        if rec:
+            api_key = rec
+            log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+        else:
+            api_key = generate_api_key()
+            create_api_key(company_safe, api_key, daily_limit=500)
+            log_event("INFO", "/register", "new_key_created", company=company_safe)
+    except Exception:
+        # fallback to raw sqlite access (backwards-compatible)
+        import sqlite3
+        con = sqlite3.connect(str(DB_DIR / "auth.db"))
+        cur = con.cursor()
+        cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
+        row = cur.fetchone()
+        if row:
+            api_key = row[0]
+            log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+        else:
+            api_key = generate_api_key()
+            # try to use create_api_key, else insert raw
+            try:
+                create_api_key(company_safe, api_key, daily_limit=500)
+            except Exception:
+                cur.execute("INSERT INTO api_keys (company, api_key, daily_limit) VALUES (?, ?, ?)",
+                            (company_safe, api_key, 500))
+                con.commit()
+            log_event("INFO", "/register", "new_key_created", company=company_safe)
+        con.close()
+
+    # Build base URLs from request.base_url (keeps http/https and host)
+    base = str(request.base_url).rstrip("/")  # e.g. "http://127.0.0.1:8000" or dev URL
+
+    # Example endpoints for this API key
+    examples = {
+        "register_get": f"{base}/register",
+        "files_list_html": f"{base}/api/v1/{company_safe}/surveys/Survey123/files/list?api_key={api_key}",
+        "files_json": f"{base}/api/v1/{company_safe}/surveys/Survey123/files",
+        "upload": f"{base}/api/v1/{company_safe}/surveys/Survey123/upload",
+        "download": f"{base}/api/v1/{company_safe}/surveys/Survey123/download/user1_image.jpg",
+        "optimize": f"{base}/api/v1/{company_safe}/surveys/Survey123/optimize/user1_image.jpg",
+    }
+
+    return templates.TemplateResponse("register_result.html", {
+        "request": request,
+        "company": company_safe,
+        "api_key": api_key,
+        "examples": examples,
+        "base_url": base
+    })
 
 # http://127.0.0.1:8000/api/v1/walr/surveys/survey123/upload
 @app.post("/api/v1/{company}/surveys/{survey}/upload")
@@ -163,6 +220,23 @@ async def upload_file(
     # Basic sanity checks
     if not survey or not user_id:
         raise HTTPException(status_code=400, detail="survey and user_id are required")
+    
+
+
+
+
+    logger.info("UPLOAD_REQUEST: company=%s survey=%s user_id=%s filename_field=%s content_type=%s", 
+                company, survey, user_id, filename, file.content_type)
+
+    # show GCS mode as seen by storage_adapter
+    try:
+        import storage_adapter
+        logger.info("STORAGE ADAPTER: USE_GCS=%s GCS_BUCKET=%s", getattr(storage_adapter, "USE_GCS", None), getattr(storage_adapter, "GCS_BUCKET", None))
+    except Exception as e:
+        logger.exception("storage_adapter import failed: %s", e)
+
+
+
 
     # Read file into memory chunk-by-chunk to check size and then write to disk
     contents = await file.read()
@@ -636,8 +710,8 @@ def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str,
 
 
 #http://127.0.0.1:8000/optimize/mysurvey/filename.jpg
-@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
-async def optimize_endpoint(company: str, survey: str, filename: str):
+# @app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
+# async def optimize_endpoint(company: str, survey: str, filename: str):
     survey_safe = secure_name(survey).lower()
     company_safe = secure_name(company).lower()
     try:
@@ -668,11 +742,112 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
         # return helpful message and 500 so frontend can show it
         log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        
+    if optimized_url.startswith("http"):
+        return RedirectResponse(url=optimized_url, status_code=302)    
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
     return {"ok": True, "optimized": optimized_url}
 
+@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
+async def optimize_endpoint(company: str, survey: str, filename: str):
+    survey_safe = secure_name(survey).lower()
+    company_safe = secure_name(company).lower()
 
+    try:
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimize_request for {filename}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        # call the worker which may return:
+        # - a signed URL (http/https) OR
+        # - "gs://bucket/path/opt_..." OR
+        # - "uploads/..." (local path) OR
+        # - "/api/v1/.../download/..." (relative path)
+        download_path = optimize_media_and_cache(company_safe, survey_safe, filename)
+
+        # Defensive: log what the helper returned (very helpful to debug)
+        log_event("DEBUG", "/api/v1/{company}/surveys/{survey}/optimize",
+                  f"optimize returned raw download_path: {download_path}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        optimized_url = None
+
+        # Normalize types and values to a final URL string the client can consume:
+        if isinstance(download_path, dict):
+            # If helper accidentally returned a dict, try common keys
+            optimized_url = download_path.get("optimized") or download_path.get("url") or download_path.get("download_url")
+        elif isinstance(download_path, str):
+            dp = download_path.strip()
+            if dp.startswith("http://") or dp.startswith("https://"):
+                optimized_url = dp
+            elif dp.startswith("gs://"):
+                # convert gs://... to signed URL via your adapter
+                # gs://bucket/company/survey/optimized/opt_name
+                try:
+                    # extract filename and object prefix
+                    # we expect object path is after gs://<bucket>/
+                    _parts = dp.split("/", 3)
+                    # dp = "gs://bucket/path/..."
+                    if len(_parts) >= 4:
+                        # object path = parts[3]
+                        obj_path = _parts[3]
+                        # assume object path = {company}/{survey}/optimized/{opt_name}
+                        # extract last segment as filename
+                        opt_name = Path(obj_path).name
+                        # get signed URL via your adapter
+                        optimized_url = get_signed_url(company_safe, survey_safe + "/optimized", opt_name)
+                    else:
+                        # fallback: attempt to return the raw gs:// path
+                        optimized_url = dp
+                except Exception as e:
+                    log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize",
+                              f"failed to convert gs:// path to signed url: {e}",
+                              company=company_safe, survey=survey_safe, filename=filename)
+                    optimized_url = dp  # keep as fallback
+            elif dp.startswith("uploads") or dp.startswith("/uploads") or dp.startswith("download/") or dp.startswith("/api/v1"):
+                # If it's a local uploads path or API download path, expose a proper relative URL for client
+                # If it starts with "uploads/..." convert to download endpoint
+                if dp.startswith("uploads"):
+                    # dp -> uploads/{company}/{survey}/optimized/opt_name
+                    name = Path(dp).name
+                    optimized_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/optimized/{name}"
+                elif dp.startswith("/uploads"):
+                    name = Path(dp).name
+                    optimized_url = f"/api/v1/{company_safe}/surveys/{survey_safe}/download/optimized/{name}"
+                elif dp.startswith("download/") or dp.startswith("/api/v1"):
+                    # dp already looks like an API download path; make absolute if necessary
+                    optimized_url = dp if dp.startswith("/") else f"/{dp}"
+                else:
+                    optimized_url = dp
+            else:
+                # unknown string form - return as-is and log
+                optimized_url = dp
+        else:
+            # unexpected return type
+            optimized_url = None
+
+        # Final logging for clarity
+        log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize",
+                  f"optimize_ready download_path={download_path} optimized_url={optimized_url}",
+                  company=company_safe, survey=survey_safe, filename=filename)
+
+        if not optimized_url:
+            # return explicit JSON so client sees consistent structure
+            log_event("WARN", "/api/v1/{company}/surveys/{survey}/optimize",
+                      "optimize produced no optimized URL", company=company_safe, survey=survey_safe, filename=filename)
+            return JSONResponse({"ok": False, "error": "optimize produced no url", "raw": str(download_path)}, status_code=500)
+
+        # If it's a gs:// fallback that couldn't be converted, the client will fail later; we prefer to return something
+        return JSONResponse({"ok": True, "optimized": optimized_url})
+
+    except FileNotFoundError:
+        log_event("WARN", "/api/v1/{company}/surveys/{survey}/optimize", "source_not_found", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": "source file not found"}, status_code=404)
+    except RuntimeError as e:
+        log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    except Exception as e:
+        # catch-all to avoid returning HTML pages or unstructured responses
+        log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"unexpected_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
+        return JSONResponse({"ok": False, "error": "unexpected error", "detail": str(e)}, status_code=500)
 
 
 # Simple HTML view to list files for a survey with preview and actions
@@ -822,6 +997,7 @@ async def files_list_template(
 #     return FileResponse(path=candidate, media_type=mimetype or "application/octet-stream",
 #                         filename=candidate.name, headers={"Content-Disposition": f'attachment; filename="{candidate.name}"'})
 
+
 @app.get("/api/v1/{company}/surveys/{survey}/download/{path:path}")
 async def download_file(company: str, survey: str, path: str):
     company_safe = secure_name(company).lower()
@@ -837,32 +1013,84 @@ async def download_file(company: str, survey: str, path: str):
             raise HTTPException(status_code=500, detail="Server misconfigured")
 
         try:
-            client = gcs_storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(object_path)
-
-            if not blob.exists():
-                raise HTTPException(status_code=404, detail="file not found")
-
-            # Desired filename in Content-Disposition (use actual file name)
-            filename_only = Path(path).name
-
-            # Generate a V4 signed URL with Content-Disposition forcing download
-            signed_url = blob.generate_signed_url(
-                version="v4",
-                expiration=timedelta(minutes=15),
-                method="GET",
-                response_disposition=f'attachment; filename="{filename_only}"'
-            )
-
-            # Redirect client to the signed URL so the browser downloads the file
-            return RedirectResponse(url=signed_url, status_code=302)
+            # Prefer storage_adapter.get_signed_url which already implements ADC + fallback logic
+            # and will use the GCP_SA_KEY fallback if ADC cannot sign.
+            # storage_adapter.get_signed_url returns a string URL (or raises).
+            try:
+                signed_url = get_signed_url(company_safe, survey_safe, Path(path).name)
+                log_event("INFO", "download_file", f"redirecting to signed URL via storage_adapter", company=company_safe, survey=survey_safe, filename=path)
+                return RedirectResponse(url=signed_url, status_code=302)
+            except Exception as sign_err:
+                # Log the signing failure and attempt a diagnostic flow using google client directly, but keep it as a fallback.
+                logger.exception("storage_adapter.get_signed_url failed, falling back to direct client attempt: %s", sign_err)
+                # FALLBACK: try direct client -> useful for debugging but not necessary for normal operation
+                client = gcs_storage.Client()
+                bucket = client.bucket(bucket_name)
+                blob = bucket.blob(object_path)
+                if not blob.exists():
+                    raise HTTPException(status_code=404, detail="file not found")
+                # attempt to generate a v4 signed url directly (may fail if ADC lacks private key)
+                signed_url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(minutes=15),
+                    method="GET",
+                    response_disposition=f'attachment; filename="{Path(path).name}"',
+                    response_type=blob.content_type or "application/octet-stream"
+                )
+                log_event("WARN", "download_file", "direct-gcs-signed-url-generated-as-fallback", company=company_safe, survey=survey_safe, filename=path)
+                return RedirectResponse(url=signed_url, status_code=302)
 
         except HTTPException:
+            # re-raise FastAPI HTTPExceptions (404 etc)
             raise
         except Exception as e:
+            # very verbose logging for debugging (include stacktrace)
+            logger.exception("Failed to generate/download file for %s/%s/%s: %s", company_safe, survey_safe, path, e)
             log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
-            raise HTTPException(status_code=500, detail="Failed to generate download URL")
+            # Return structured JSON in dev to help frontend debugging (avoid returning HTML stack traces)
+            return JSONResponse({"ok": False, "error": "Failed to generate download URL", "detail": str(e)}, status_code=500)
+
+
+    # if GCS_ENABLED:
+    #     # Build object name: support nested paths like "optimized/opt_name" or plain filename
+    #     object_path = f"{company_safe}/{survey_safe}/{path.lstrip('/')}"
+    #     bucket_name = os.getenv("GCS_BUCKET")
+    #     if not bucket_name:
+    #         log_event("ERROR", "download_file", "no_gcs_bucket_configured")
+    #         raise HTTPException(status_code=500, detail="Server misconfigured")
+
+    #     try:
+    #         client = gcs_storage.Client()
+    #         bucket = client.bucket(bucket_name)
+    #         blob = bucket.blob(object_path)
+
+    #         if not blob.exists():
+    #             raise HTTPException(status_code=404, detail="file not found")
+
+    #         # Desired filename in Content-Disposition (use actual file name)
+    #         filename_only = Path(path).name
+
+    #         # prefer using blob.content_type when available (fall back to generic)
+    #         resp_type = blob.content_type if getattr(blob, "content_type", None) else "application/octet-stream"
+
+
+    #         # Generate a V4 signed URL with Content-Disposition forcing download
+    #         signed_url = blob.generate_signed_url(
+    #             version="v4",
+    #             expiration=timedelta(minutes=15),
+    #             method="GET",
+    #             response_disposition=f'attachment; filename="{filename_only}"',
+    #             response_type=resp_type
+    #         )
+
+    #         # Redirect client to the signed URL so the browser downloads the file
+    #         return RedirectResponse(url=signed_url, status_code=302)
+
+    #     except HTTPException:
+    #         raise
+    #     except Exception as e:
+    #         log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
+    #         raise HTTPException(status_code=500, detail="Failed to generate download URL")
 
     # -----------------------
     # LOCAL MODE (unchanged, still returns FileResponse with attachment header)

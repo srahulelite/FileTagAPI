@@ -70,8 +70,8 @@
               </td>
               <td>
                 <div class="btn-group" role="group">
-                    <a href="/api/v1/{{ company }}/surveys/{{ survey }}/download/{{ f.filename }}" class="btn btn-outline-light action-btn" title="Download original" download>
-                        <i class="bi bi-download"></i>
+                    <a href="#" onclick="onOriginalDownload('{{ f.filename }}', this); return false;" class="btn btn-outline-light action-btn" title="Download original">
+                      <i class="bi bi-download"></i>
                     </a>
                   <button class="btn btn-primary" onclick="doOptimizeDownload('{{ f.optimize_url }}', this)">
                     <i class="bi bi-download"></i>&nbsp;Optimized
@@ -103,28 +103,114 @@
   </div>
 
   <script>
-    async function doOptimizeDownload(optUrl, btn) {
-        btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Optimizing...';
-        try {
-            const r = await fetch(optUrl);
-            const j = await r.json();
-            if (!j.ok) { alert('Optimize failed: ' + (j.error || 'unknown')); return; }
-            const url = j.optimized; // already a '/download/...' URL
-            // create and click hidden anchor to download
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = url.split('/').pop();
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-        } catch(err) {
-            console.error(err);
-            alert('Optimize/download failed: ' + (err.message || err));
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-download"></i>&nbsp;Optimized';
+    async function downloadSignedUrlAsFile(url, suggestedFilename) {
+      if (!url) throw new Error("missing url");
+      if (url.startsWith("/")) url = window.location.origin + url;
+
+      // Try fetch first (preferred — gives us blob & filename control)
+      try {
+        const res = await fetch(url, { method: "GET", credentials: "omit", mode: "cors" });
+        if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+        // if content-type is json, follow the JSON path (your code may not need this now)
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.indexOf('application/json') === 0) {
+          const j = await res.json();
+          const candidate = j.optimized || j.download_url || j.url;
+          if (!candidate) throw new Error("server returned JSON but no url found");
+          // recurse to handle signed URL or API download path
+          return downloadSignedUrlAsFile(candidate, suggestedFilename);
         }
+        const blob = await res.blob();
+        const filename = suggestedFilename || decodeURIComponent((new URL(url)).pathname.split('/').pop().split('?')[0]) || 'download.bin';
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+        return;
+      } catch (err) {
+        // If fetch was blocked by CORS or network, fallback to opening in a new tab/window
+        console.warn("Fetch download failed, falling back to window.open (likely CORS). Error:", err);
+        // Use a plain navigation which avoids CORS; rely on response-content-disposition/header on GCS to set filename.
+        window.open(url, '_blank', 'noopener');
+        return;
+      }
     }
+
+    /* --- end helper --- */
+
+    // async function doOptimizeDownload(optUrl, btn) {
+    //     btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Optimizing...';
+    //     try {
+    //         const r = await fetch(optUrl);
+    //         const j = await r.json();
+    //         if (!j.ok) { alert('Optimize failed: ' + (j.error || 'unknown')); return; }
+    //         const url = j.optimized; // already a '/download/...' URL
+    //         // create and click hidden anchor to download
+    //         const a = document.createElement('a');
+    //         a.href = url;
+    //         a.download = url.split('/').pop();
+    //         document.body.appendChild(a);
+    //         a.click();
+    //         a.remove();
+    //     } catch(err) {
+    //         console.error(err);
+    //         alert('Optimize/download failed: ' + (err.message || err));
+    //     } finally {
+    //         btn.disabled = false;
+    //         btn.innerHTML = '<i class="bi bi-download"></i>&nbsp;Optimized';
+    //     }
+    // }
+
+    async function onOriginalDownload(filename, btnEl) {
+      try {
+          if (btnEl) { btnEl.disabled = true; }
+          // build server download URL (same as href before)
+          const downloadApi = `/api/v1/{{ company }}/surveys/{{ survey }}/download/${encodeURIComponent(filename)}`;
+          // let the helper handle JSON vs redirect vs signed URL
+          await downloadSignedUrlAsFile(downloadApi, filename);
+      } catch(err) {
+          console.error(err);
+          alert('Download failed: ' + (err && err.message ? err.message : err));
+      } finally {
+          if (btnEl) { btnEl.disabled = false; }
+      }
+    }
+
+    async function doOptimizeDownload(optUrl, btn) {
+      btn.disabled = true;
+      const originalLabel = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Optimizing...';
+      try {
+          // fetch optimize endpoint and expect JSON { ok: true, optimized: "..." }
+          const res = await fetch(optUrl, { method: 'GET', credentials: 'same-origin' });
+          if (!res.ok) {
+              const text = await res.text().catch(()=>null);
+              throw new Error(`Optimize request failed: ${res.status} ${res.statusText} ${text||''}`);
+          }
+          const json = await res.json();
+          if (!json || !json.ok) throw new Error('Optimize failed: ' + (json && json.error ? json.error : 'unknown'));
+
+          const signedOrDownloadUrl = json.optimized || json.download_url || json.url;
+          if (!signedOrDownloadUrl) throw new Error('Optimize response missing optimized URL');
+
+          // Use the robust blob-download helper which will follow redirects or fetch signed URL
+          const suggestedName = (typeof signedOrDownloadUrl === 'string') ? signedOrDownloadUrl.split('/').pop().split('?')[0] : undefined;
+          await downloadSignedUrlAsFile(signedOrDownloadUrl, suggestedName);
+
+      } catch (err) {
+          console.error(err);
+          alert('Optimize/download failed: ' + (err && err.message ? err.message : err));
+      } finally {
+          btn.disabled = false;
+          btn.innerHTML = originalLabel || '<i class="bi bi-download"></i>&nbsp;Optimized';
+      }
+    }
+
 
 
     function openPreview(url, isVideo) {

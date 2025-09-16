@@ -789,7 +789,7 @@
         }
 
         function isSecureContext() {
-            return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
+            return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'locahost';
         }
 
         function resetWidgetToIdle() {
@@ -898,15 +898,17 @@
         window.CameraUploadWidget = window.CameraUploadWidget || {};
         // make sure init is available even if loaded earlier
     })();
-    const COMPANY = 'acuity';    // example company code (lowercase recommended)
-    const SURVEY = 'Testsurvey123'; // survey id
-    const API_KEY = '7N0mxOB8JfpxemS4HfxaMyazjLjzzkI5'; // the key you received
+    const COMPANY = 'walr';    // example company code (lowercase recommended)
+    const SURVEY = 'testsurvey321'; // survey id
+    const API_KEY = '9rMdbSMR3P657TRH_BZIRE1n5uxRSzE7'; // the key you received
 
     CameraUploadWidget.init({
         allow: 'both',
         audio: true,
         // new uploadUrl pointing to the API path (company + survey included)
-        uploadUrl: `http://127.0.0.1:8000/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+        uploadUrl: `https://filetagapi-dev-4zslrnt5kq-el.a.run.app/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+        // uploadUrl: `http://127.0.0.1:8000/api/v1/${encodeURIComponent(COMPANY)}/surveys/${encodeURIComponent(SURVEY)}/upload`,
+
         apiKey: API_KEY, // pass key into widget config
     });
 

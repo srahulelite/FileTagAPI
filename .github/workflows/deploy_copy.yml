@@ -33,38 +33,6 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT }}
           install_components: 'gke-gcloud-auth-plugin'
 
-      # -----------------------
-      # Ensure GCS CORS is set (idempotent)
-      # -----------------------
-      - name: Ensure GCS CORS is set (idempotent)
-        # Uses same credentials from "Authenticate to GCP" above.
-        env:
-          BUCKET: ${{ secrets.GCS_BUCKET }}
-          # Edit these to match EXACT origins where your frontend is served (protocol+host+port).
-          FRONTEND_ORIGINS: |
-            http://127.0.0.1:8000
-            http://localhost:8000
-            https://filetagapi-dev-24717612698.asia-south1.run.app
-            https://filetagapi-dev-4zslrnt5kq-el.a.run.app
-            # Uncomment/add your production origin if needed:
-            # https://filetagapi-prod-XXXXXXXXXX.a.run.app
-        run: |
-          echo "Writing cors.json for bucket: $BUCKET"
-          # Build JSON array from FRONTEND_ORIGINS (multiline env var)
-          ORIGINS_ARRAY=$(printf '%s\n' "$FRONTEND_ORIGINS" | awk 'NF { printf "\"%s\",", $0 }' | sed 's/,$//')
-          cat > cors.json <<EOF
-          [{
-            "origin": [${ORIGINS_ARRAY}],
-            "method": ["GET","HEAD"],
-            "responseHeader": ["Content-Type","Content-Disposition","x-goog-resumable","x-goog-meta-*"],
-            "maxAgeSeconds": 3600
-          }]
-          EOF
-          echo "Applying CORS to gs://$BUCKET"
-          gsutil cors set cors.json gs://$BUCKET
-          echo "Current CORS for gs://$BUCKET:"
-          gsutil cors get gs://$BUCKET || true
-
       # DEBUG + Explicitly configure docker credential helper for Artifact Registry host
       - name: Configure Docker to use gcloud credentials for Artifact Registry (asia-south1)
         run: |

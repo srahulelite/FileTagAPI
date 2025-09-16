@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 
+# ensure required directories exist in the image (prevents runtime error if they get excluded)
+RUN mkdir -p /app/static /app/templates && chown -R root:root /app/static /app/templates
+
 # create uploads dir
 RUN mkdir -p /app/uploads
 VOLUME ["/app/uploads"]
