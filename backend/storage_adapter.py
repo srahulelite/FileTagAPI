@@ -72,151 +72,224 @@
 #         return f"/api/v1/{company_safe}/surveys/{survey_safe}/download/{filename}"
 
 # storage_adapter.py (robust replacement)
+# import os
+# import logging
+# from pathlib import Path
+# from datetime import timedelta
+# from typing import Optional
+
+# import os
+
+# def _env_true_any(*names, default="false"):
+#     for n in names:
+#         v = os.getenv(n)
+#         if v is not None:
+#             return str(v).strip().lower() in ("1","true","yes","on")
+#     return str(default).strip().lower() in ("1","true","yes","on")
+
+# logger = logging.getLogger(__name__)
+# logger.addHandler(logging.NullHandler())
+
+# # Accept either USE_GCS or the older GCS_ENABLED flag
+# USE_GCS = _env_true_any("USE_GCS", "GCS_ENABLED", default="false")
+# GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
+
+# # Lazy holders
+# _gcs_client = None
+# _gcs_bucket = None
+
+# def _local_base() -> Path:
+#     base = Path(os.getenv("BASE_UPLOAD_DIR", "uploads"))
+#     base.mkdir(parents=True, exist_ok=True)
+#     return base
+
+# def _ensure_gcs_ready():
+#     """
+#     Initialize _gcs_client and _gcs_bucket lazily and validate configuration.
+#     Raises RuntimeError on bad config/credentials.
+#     """
+#     global _gcs_client, _gcs_bucket
+#     if not USE_GCS:
+#         raise RuntimeError("GCS usage not enabled (USE_GCS is false)")
+
+#     if not GCS_BUCKET:
+#         raise RuntimeError("GCS_BUCKET env var not set but USE_GCS is true")
+
+#     if _gcs_client is not None and _gcs_bucket is not None:
+#         return _gcs_client, _gcs_bucket
+
+#     try:
+#         from google.cloud import storage
+#     except Exception as e:
+#         raise RuntimeError("google-cloud-storage not installed or failed to import. Install with `pip install google-cloud-storage`.") from e
+
+#     try:
+#         _gcs_client = storage.Client()
+#     except Exception as e:
+#         raise RuntimeError(f"Failed to initialize GCS client: {e}") from e
+
+#     try:
+#         _gcs_bucket = _gcs_client.bucket(GCS_BUCKET)
+#         # validate bucket exists / accessible (this does a small check)
+#         if not _gcs_bucket.exists():
+#             raise RuntimeError(f"GCS bucket '{GCS_BUCKET}' does not exist or is not accessible by the configured credentials.")
+#     except Exception as e:
+#         # reset to avoid partially-initialized state
+#         _gcs_client = None
+#         _gcs_bucket = None
+#         raise RuntimeError(f"Failed to access GCS bucket '{GCS_BUCKET}': {e}") from e
+
+#     logger.info("GCS ready - bucket=%s", GCS_BUCKET)
+#     return _gcs_client, _gcs_bucket
+
+# def save_file_bytes(company: str, survey: str, filename: str, bytes_data: bytes) -> str:
+#     """
+#     Saves raw bytes.
+#     Returns:
+#       - Local mode: path string under uploads/... (absolute or relative depending on BASE_UPLOAD_DIR)
+#       - GCS mode: 'gs://{bucket}/{company}/{survey}/{filename}'
+#     """
+#     company_safe = str(company).strip()
+#     survey_safe = str(survey).strip()
+#     filename_safe = str(filename).strip()
+
+#     if USE_GCS:
+#         try:
+#             _, bucket = _ensure_gcs_ready()
+#             blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
+#             blob = bucket.blob(blob_path)
+#             logger.info("Uploading to GCS: gs://%s/%s (bytes=%d)", bucket.name, blob_path, len(bytes_data))
+#             blob.upload_from_string(bytes_data)
+#             return f"gs://{bucket.name}/{blob_path}"
+#         except Exception as e:
+#             logger.exception("GCS upload failed for %s/%s/%s", company_safe, survey_safe, filename_safe)
+#             raise
+
+#     # Local fallback
+#     base = _local_base() / company_safe / survey_safe
+#     base.mkdir(parents=True, exist_ok=True)
+#     p = base / filename_safe
+#     logger.info("Saving local file: %s", p)
+#     p.write_bytes(bytes_data)
+#     return str(p)
+
+# def save_file_from_path(company: str, survey: str, filename: str, local_path: Path) -> str:
+#     """
+#     Upload local file to GCS if USE_GCS, otherwise return local_path as str.
+#     """
+#     company_safe = str(company).strip()
+#     survey_safe = str(survey).strip()
+#     filename_safe = str(filename).strip()
+
+#     if USE_GCS:
+#         try:
+#             _, bucket = _ensure_gcs_ready()
+#             blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
+#             blob = bucket.blob(blob_path)
+#             logger.info("Uploading file to GCS from path: %s -> gs://%s/%s", local_path, bucket.name, blob_path)
+#             blob.upload_from_filename(str(local_path))
+#             return f"gs://{bucket.name}/{blob_path}"
+#         except Exception as e:
+#             logger.exception("GCS file upload from path failed")
+#             raise
+#     else:
+#         # local path assumed already in uploads; ensure it's readable
+#         logger.info("Using local path (no GCS): %s", local_path)
+#         return str(local_path)
+
+# def get_signed_url(company: str, survey: str, filename: str, expires_seconds: int = 3600) -> str:
+#     """
+#     Returns:
+#       - GCS: signed URL (v4)
+#       - Local: internal download endpoint path
+#     """
+#     company_safe = str(company).strip()
+#     survey_safe = str(survey).strip()
+#     filename_safe = str(filename).strip()
+
+#     if USE_GCS:
+#         try:
+#             _, bucket = _ensure_gcs_ready()
+#             blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
+#             blob = bucket.blob(blob_path)
+#             logger.info("Generating signed URL for gs://%s/%s (expires=%ds)", bucket.name, blob_path, expires_seconds)
+#             url = blob.generate_signed_url(expiration=timedelta(seconds=expires_seconds))
+#             return url
+#         except Exception as e:
+#             logger.exception("Failed to generate signed URL")
+#             raise
+#     else:
+#         return f"/api/v1/{company_safe}/surveys/{survey_safe}/download/{filename_safe}"
+
+# at top of file, ensure these imports exist
 import os
+import json
 import logging
-from pathlib import Path
 from datetime import timedelta
-from typing import Optional
+from google.oauth2 import service_account
+logger = logging.getLogger("storage_adapter")
 
-import os
+# Replace your get_signed_url with this function:
+def get_signed_url(company: str, survey: str, filename: str, expires_seconds: int = 3600):
+    company_safe = str(company).strip()
+    survey_safe = str(survey).strip()
+    filename_safe = str(filename).strip()
 
-def _env_true_any(*names, default="false"):
-    for n in names:
-        v = os.getenv(n)
-        if v is not None:
-            return str(v).strip().lower() in ("1","true","yes","on")
-    return str(default).strip().lower() in ("1","true","yes","on")
-
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
-
-# Accept either USE_GCS or the older GCS_ENABLED flag
-USE_GCS = _env_true_any("USE_GCS", "GCS_ENABLED", default="false")
-GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
-
-# Lazy holders
-_gcs_client = None
-_gcs_bucket = None
-
-def _local_base() -> Path:
-    base = Path(os.getenv("BASE_UPLOAD_DIR", "uploads"))
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-def _ensure_gcs_ready():
-    """
-    Initialize _gcs_client and _gcs_bucket lazily and validate configuration.
-    Raises RuntimeError on bad config/credentials.
-    """
-    global _gcs_client, _gcs_bucket
     if not USE_GCS:
-        raise RuntimeError("GCS usage not enabled (USE_GCS is false)")
+        return f"/api/v1/{company_safe}/surveys/{survey_safe}/download/{filename_safe}"
 
-    if not GCS_BUCKET:
-        raise RuntimeError("GCS_BUCKET env var not set but USE_GCS is true")
-
-    if _gcs_client is not None and _gcs_bucket is not None:
-        return _gcs_client, _gcs_bucket
-
+    blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
     try:
-        from google.cloud import storage
-    except Exception as e:
-        raise RuntimeError("google-cloud-storage not installed or failed to import. Install with `pip install google-cloud-storage`.") from e
+        _, bucket = _ensure_gcs_ready()
+        blob = bucket.blob(blob_path)
+        logger.info("Generating signed URL for gs://%s/%s (expires=%ds)", bucket.name, blob_path, expires_seconds)
 
-    try:
-        _gcs_client = storage.Client()
-    except Exception as e:
-        raise RuntimeError(f"Failed to initialize GCS client: {e}") from e
-
-    try:
-        _gcs_bucket = _gcs_client.bucket(GCS_BUCKET)
-        # validate bucket exists / accessible (this does a small check)
-        if not _gcs_bucket.exists():
-            raise RuntimeError(f"GCS bucket '{GCS_BUCKET}' does not exist or is not accessible by the configured credentials.")
-    except Exception as e:
-        # reset to avoid partially-initialized state
-        _gcs_client = None
-        _gcs_bucket = None
-        raise RuntimeError(f"Failed to access GCS bucket '{GCS_BUCKET}': {e}") from e
-
-    logger.info("GCS ready - bucket=%s", GCS_BUCKET)
-    return _gcs_client, _gcs_bucket
-
-def save_file_bytes(company: str, survey: str, filename: str, bytes_data: bytes) -> str:
-    """
-    Saves raw bytes.
-    Returns:
-      - Local mode: path string under uploads/... (absolute or relative depending on BASE_UPLOAD_DIR)
-      - GCS mode: 'gs://{bucket}/{company}/{survey}/{filename}'
-    """
-    company_safe = str(company).strip()
-    survey_safe = str(survey).strip()
-    filename_safe = str(filename).strip()
-
-    if USE_GCS:
+        # 1) Try default signing (works if credentials contain private key)
         try:
-            _, bucket = _ensure_gcs_ready()
-            blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
-            blob = bucket.blob(blob_path)
-            logger.info("Uploading to GCS: gs://%s/%s (bytes=%d)", bucket.name, blob_path, len(bytes_data))
-            blob.upload_from_string(bytes_data)
-            return f"gs://{bucket.name}/{blob_path}"
-        except Exception as e:
-            logger.exception("GCS upload failed for %s/%s/%s", company_safe, survey_safe, filename_safe)
-            raise
-
-    # Local fallback
-    base = _local_base() / company_safe / survey_safe
-    base.mkdir(parents=True, exist_ok=True)
-    p = base / filename_safe
-    logger.info("Saving local file: %s", p)
-    p.write_bytes(bytes_data)
-    return str(p)
-
-def save_file_from_path(company: str, survey: str, filename: str, local_path: Path) -> str:
-    """
-    Upload local file to GCS if USE_GCS, otherwise return local_path as str.
-    """
-    company_safe = str(company).strip()
-    survey_safe = str(survey).strip()
-    filename_safe = str(filename).strip()
-
-    if USE_GCS:
-        try:
-            _, bucket = _ensure_gcs_ready()
-            blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
-            blob = bucket.blob(blob_path)
-            logger.info("Uploading file to GCS from path: %s -> gs://%s/%s", local_path, bucket.name, blob_path)
-            blob.upload_from_filename(str(local_path))
-            return f"gs://{bucket.name}/{blob_path}"
-        except Exception as e:
-            logger.exception("GCS file upload from path failed")
-            raise
-    else:
-        # local path assumed already in uploads; ensure it's readable
-        logger.info("Using local path (no GCS): %s", local_path)
-        return str(local_path)
-
-def get_signed_url(company: str, survey: str, filename: str, expires_seconds: int = 3600) -> str:
-    """
-    Returns:
-      - GCS: signed URL (v4)
-      - Local: internal download endpoint path
-    """
-    company_safe = str(company).strip()
-    survey_safe = str(survey).strip()
-    filename_safe = str(filename).strip()
-
-    if USE_GCS:
-        try:
-            _, bucket = _ensure_gcs_ready()
-            blob_path = f"{company_safe}/{survey_safe}/{filename_safe}"
-            blob = bucket.blob(blob_path)
-            logger.info("Generating signed URL for gs://%s/%s (expires=%ds)", bucket.name, blob_path, expires_seconds)
             url = blob.generate_signed_url(expiration=timedelta(seconds=expires_seconds))
+            logger.info("Signed URL generated using default credentials")
+            return url
+        except Exception as first_err:
+            # Only log and fall back; keep the exception for debugging
+            logger.warning("Default generate_signed_url failed (%s). Will attempt fallback using service-account JSON from GCP_SA_KEY.", first_err)
+
+        # 2) Fallback: attempt to read service-account JSON provided via Secret Manager through env var
+        sa_env = os.getenv("GCP_SA_KEY")
+        if not sa_env:
+            raise RuntimeError("Default credentials cannot sign URLs and GCP_SA_KEY env var not set; cannot generate signed URL.")
+
+        # Try to interpret sa_env as either a path to JSON file or raw JSON string
+        sa_info = None
+        try:
+            if os.path.exists(sa_env):
+                logger.info("GCP_SA_KEY points to a file path; loading JSON from file")
+                with open(sa_env, "r", encoding="utf-8") as f:
+                    sa_info = json.load(f)
+            else:
+                # treat as raw JSON string
+                # log only the length, not the contents, for safety
+                logger.info("GCP_SA_KEY provided as env string of length %d", len(sa_env))
+                sa_info = json.loads(sa_env)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse service account JSON from GCP_SA_KEY: {e}") from e
+
+        # Build credentials from the service account info and use it to sign
+        try:
+            sa_creds = service_account.Credentials.from_service_account_info(sa_info)
+        except Exception as e:
+            raise RuntimeError(f"Failed to build credentials from service account info: {e}") from e
+
+        # Now generate signed URL using explicit credentials (this uses the private key)
+        try:
+            url = blob.generate_signed_url(expiration=timedelta(seconds=expires_seconds), credentials=sa_creds)
+            logger.info("Signed URL generated using fallback service account JSON (via GCP_SA_KEY)")
             return url
         except Exception as e:
-            logger.exception("Failed to generate signed URL")
+            logger.exception("Fallback generate_signed_url with service account JSON failed")
             raise
-    else:
-        return f"/api/v1/{company_safe}/surveys/{survey_safe}/download/{filename_safe}"
+
+    except Exception:
+        logger.exception("Failed to generate signed URL for %s", blob_path)
+        # raise upward so caller returns 500 (or handle gracefully if you prefer)
+        raise
+

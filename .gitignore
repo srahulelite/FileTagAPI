@@ -212,3 +212,4 @@ gha-key.json
 /backend/key.json
 # local GCP key
 /backend/filetagapi-sa.json
+/backend/filetagapi-signer-key.json
