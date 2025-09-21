@@ -22,11 +22,6 @@ def init_db():
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-<<<<<<< HEAD
-=======
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_api_keys_company ON api_keys(company)")
-
->>>>>>> feat/decouple-db
     cur.execute("""
     CREATE TABLE IF NOT EXISTS usage (
       id INTEGER PRIMARY KEY,
