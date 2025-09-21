@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {# templates/register_result.html #}
 <!doctype html>
 <html>
@@ -141,5 +142,42 @@ function downloadJSON(){
 }
 </script>
 
+=======
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Registration Success</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.6; }
+    code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
+    h1, h2, h3 { color: #333; }
+    .examples { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    a { color: #0066cc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>API Key Created</h1>
+  <p><strong>Company</strong>: {{ company }}</p>
+  <p><strong>API Key</strong>: <code>{{ api_key }}</code></p>
+
+  <h2>Usage</h2>
+  <p>Include this key in your request header:</p>
+  <pre><code>X-API-Key: {{ api_key }}</code></pre>
+
+  <div class="examples">
+    <h3>Example Endpoints</h3>
+    <ul>
+      <li>List files (JSON): <a href="{{ examples.files_json }}">{{ examples.files_json }}</a></li>
+      <li>List files (HTML): <a href="{{ examples.files_list_html }}">{{ examples.files_list_html }}</a></li>
+      <li>Upload file (POST): <code>{{ examples.upload }}</code></li>
+      <li>Download file: <code>{{ examples.download }}</code></li>
+      <li>Optimize file: <code>{{ examples.optimize }}</code></li>
+    </ul>
+  </div>
+
+  <p style="margin-top:2rem;"> You’re ready to start uploading and managing files for <strong>{{ company }}</strong>.</p>
+>>>>>>> feat/decouple-db
 </body>
 </html>

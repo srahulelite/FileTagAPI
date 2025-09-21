@@ -11,19 +11,16 @@ from typing import List, Optional
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from PIL import Image
-from tags_util import add_random_tags_for_file, get_tags
 from fastapi.responses import FileResponse
 from fastapi import Header, Depends
-from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
+import os
 from fastapi import HTTPException, status
-from logs_util import log_event, init_logs_db
 import subprocess
 import secrets
 import aiofiles
 import re
 import io
 import mimetypes
-import os
 from storage_adapter import save_file_bytes, save_file_from_path, get_signed_url, USE_GCS
 from google.cloud import storage
 from typing import List
@@ -37,6 +34,24 @@ DB_DIR.mkdir(parents=True, exist_ok=True)
 # (optional) read env locally
 GCS_ENABLED = USE_GCS
 
+if os.getenv("DB_TYPE", "sqlite").lower() == "postgres":
+    # use Postgres adapter
+        from auth_sql import (
+        get_key_record,
+        create_api_key,
+        increment_usage_and_check,
+        init_db as auth_init_db,
+        insert_log as log_event,   # replace logs_util.log_event
+        add_random_tags_for_file,  # if your tags_util wrapper expects this name
+        get_key_record_for_company,
+        get_tags_for_file as get_tags,
+    )
+else:
+    # default: sqlite adapter (your existing auth.py)
+    from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
+    from logs_util import log_event, init_logs_db
+    from tags_util import add_random_tags_for_file, get_tags
+
 
 app = FastAPI(title="Upload Service")
 
@@ -44,7 +59,7 @@ app = FastAPI(title="Upload Service")
 auth_init_db()
 
 # intialize logs DB
-init_logs_db()
+# init_logs_db()
 
 # mount static + templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -137,6 +152,7 @@ async def register_get(request: Request):
 async def register_post(request: Request, company: str = Form(...)):
     company_safe = secure_name(company).lower()
 
+<<<<<<< HEAD
     # Prefer using auth helpers if present
     # try to use get_key_record_for_company() if auth exposes it
     api_key = None
@@ -197,6 +213,142 @@ async def register_post(request: Request, company: str = Form(...)):
         "examples": examples,
         "base_url": base
     })
+=======
+    # Try to find existing key by company (preferred)
+    rec = None
+    try:
+        if "get_key_record_for_company" in globals():
+            rec = get_key_record_for_company(company_safe)
+        else:
+            # fallback to older method: raw sqlite select (only for sqlite mode)
+            import sqlite3
+            con = sqlite3.connect(str(Path("uploads") / "auth.db"))
+            cur = con.cursor()
+            cur.execute("SELECT company, api_key, daily_limit FROM api_keys WHERE company = ?", (company_safe,))
+            row = cur.fetchone()
+            con.close()
+            if row:
+                rec = row
+    except Exception as e:
+        # If DB read failed for some reason, log and proceed to attempt creation
+        try:
+            log_event("ERROR", "/register", f"get_key_record_for_company_error:{e}", company=company_safe)
+        except Exception:
+            pass
+        rec = None
+
+    if rec:
+        # Return existing key (idempotent)
+        api_key = rec[1] if isinstance(rec, (list, tuple)) else rec
+        log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+    else:
+        # Not found: create new key, but handle race if another process inserts concurrently
+        api_key = generate_api_key()
+        try:
+            # create_api_key should return the final key (Postgres version does)
+            created_key = create_api_key(company_safe, api_key, daily_limit=500)
+            # created_key may be the same as api_key or the existing key if a race happened
+            api_key = created_key or api_key
+            log_event("INFO", "/register", "new_key_created", company=company_safe)
+        except Exception as e:
+            # If creation failed due to unique constraint or other race, fetch the existing key
+            try:
+                log_event("WARN", "/register", f"create_api_key_failed, fetching existing: {e}", company=company_safe)
+                # best effort: query the existing record and return it
+                if "get_key_record_for_company" in globals():
+                    rec2 = get_key_record_for_company(company_safe)
+                    if rec2:
+                        api_key = rec2[1]
+                    else:
+                        # re-raise if we can't recover
+                        raise
+                else:
+                    raise
+            except Exception as ex2:
+                # final fallback: return 500 and log
+                try:
+                    log_event("ERROR", "/register", f"register_failure:{ex2}", company=company_safe)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail="Failed to create or fetch API key")
+
+    base = str(request.base_url).rstrip("/")
+
+    examples = {
+        "files_json": f"{base}/api/v1/{company_safe}/surveys/demo/files?api_key={api_key}",
+        "files_list_html": f"{base}/api/v1/{company_safe}/surveys/demo/files/list?api_key={api_key}",
+        "upload": f"{base}/api/v1/{company_safe}/surveys/demo/upload",
+        "download": f"{base}/api/v1/{company_safe}/surveys/demo/download/<filename>",
+        "optimize": f"{base}/api/v1/{company_safe}/surveys/demo/optimize/<filename>",
+    }
+
+    return templates.TemplateResponse(
+        "register_result.html",
+        {"request": request, "company": company_safe, "api_key": api_key, "examples": examples},
+    )
+
+# async def register_post(request: Request, company: str = Form(...)):
+    company_safe = secure_name(company).lower()
+
+    # Check if key already exists
+    rec = get_key_record(company_safe) if "get_key_record_for_company" in globals() else None
+    api_key = None
+
+    if rec:
+        api_key = rec[1] if isinstance(rec, tuple) else rec
+        log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+    else:
+        api_key = generate_api_key()
+        create_api_key(company_safe, api_key, daily_limit=500)
+        log_event("INFO", "/register", "new_key_created", company=company_safe)
+
+    base = str(request.base_url).rstrip("/")
+
+    examples = {
+        "files_json": f"{base}/api/v1/{company_safe}/surveys/demo/files?api_key={api_key}",
+        "files_list_html": f"{base}/api/v1/{company_safe}/surveys/demo/files/list?api_key={api_key}",
+        "upload": f"{base}/api/v1/{company_safe}/surveys/demo/upload",
+        "download": f"{base}/api/v1/{company_safe}/surveys/demo/download/<filename>",
+        "optimize": f"{base}/api/v1/{company_safe}/surveys/demo/optimize/<filename>",
+    }
+
+    return templates.TemplateResponse(
+        "register_result.html",
+        {"request": request, "company": company_safe, "api_key": api_key, "examples": examples},
+    )
+# @app.post("/register", response_class=HTMLResponse)
+# async def register_post(request: Request, company: str = Form(...)):
+#     company_safe = secure_name(company).lower()
+#     # if already registered, return existing key
+#     rec = get_key_record_for_company(company_safe) if 'get_key_record_for_company' in globals() else None
+#     # Implement helper to look up by company
+#     from auth import get_key_record
+#     # search keys table for this company
+#     con = None
+#     import sqlite3
+#     con = sqlite3.connect(str(Path("uploads") / "auth.db"))
+#     cur = con.cursor()
+#     cur.execute("SELECT api_key FROM api_keys WHERE company = ?", (company_safe,))
+#     row = cur.fetchone()
+#     if row:
+#         api_key = row[0]
+#         log_event("INFO", "/register", "existing_key_returned", company=company_safe)
+#     else:
+#         api_key = generate_api_key()
+#         create_api_key(company_safe, api_key, daily_limit=500)
+#         log_event("INFO", "/register", "new_key_created", company=company_safe)
+#     con.close()
+#     # render result inline (simple page)
+#     html = f"""
+#     <!doctype html><html><body style='font-family:system-ui;padding:24px'>
+#       <h3>Company: {company_safe}</h3>
+#       <p><strong>API Key</strong>: <code>{api_key}</code></p>
+#       <p>Use this key in header <code>X-API-Key</code> for requests to /api/v1/{company_safe}/...</p>
+#       <p><a href="/api/v1/{company_safe}/surveys">Go to API (list)</a></p>
+#     </body></html>
+#     """
+#     return HTMLResponse(html)
+>>>>>>> feat/decouple-db
 
 # http://127.0.0.1:8000/api/v1/walr/surveys/survey123/upload
 @app.post("/api/v1/{company}/surveys/{survey}/upload")

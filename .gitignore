@@ -213,3 +213,6 @@ gha-key.json
 # local GCP key
 /backend/filetagapi-sa.json
 /backend/filetagapi-signer-key.json
+/backend/cloud_sql_proxy.exe
+/backend/uploads
+/backend/filetagapi-proxy-sa.json
