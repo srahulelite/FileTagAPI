@@ -22,6 +22,11 @@ def init_db():
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+<<<<<<< HEAD
+=======
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_api_keys_company ON api_keys(company)")
+
+>>>>>>> feat/decouple-db
     cur.execute("""
     CREATE TABLE IF NOT EXISTS usage (
       id INTEGER PRIMARY KEY,
@@ -80,6 +85,18 @@ def increment_usage_and_check(api_key: str):
         return False, count, 0
     return (count <= limit), count, limit
 
+<<<<<<< HEAD
+=======
+def get_key_record_for_company(company: str):
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("SELECT company, api_key, daily_limit FROM api_keys WHERE company = ?", (company,))
+    row = cur.fetchone()
+    con.close()
+    return row  # tuple or None
+
+
+>>>>>>> feat/decouple-db
 # call once to create DB and a demo key if you want
 if __name__ == "__main__":
     import sqlite3

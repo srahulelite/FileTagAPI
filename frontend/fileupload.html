@@ -789,7 +789,11 @@
         }
 
         function isSecureContext() {
+<<<<<<< HEAD
             return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'locahost';
+=======
+            return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
+>>>>>>> feat/decouple-db
         }
 
         function resetWidgetToIdle() {

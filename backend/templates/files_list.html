@@ -70,8 +70,13 @@
               </td>
               <td>
                 <div class="btn-group" role="group">
+<<<<<<< HEAD
                     <a href="#" onclick="onOriginalDownload('{{ f.filename }}', this); return false;" class="btn btn-outline-light action-btn" title="Download original">
                       <i class="bi bi-download"></i>
+=======
+                    <a href="/api/v1/{{ company }}/surveys/{{ survey }}/download/{{ f.filename }}" class="btn btn-outline-light action-btn" title="Download original" download>
+                        <i class="bi bi-download"></i>
+>>>>>>> feat/decouple-db
                     </a>
                   <button class="btn btn-primary" onclick="doOptimizeDownload('{{ f.optimize_url }}', this)">
                     <i class="bi bi-download"></i>&nbsp;Optimized
@@ -103,6 +108,7 @@
   </div>
 
   <script>
+<<<<<<< HEAD
     async function downloadSignedUrlAsFile(url, suggestedFilename) {
       if (!url) throw new Error("missing url");
       if (url.startsWith("/")) url = window.location.origin + url;
@@ -213,6 +219,32 @@
 
 
 
+=======
+    async function doOptimizeDownload(optUrl, btn) {
+        btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Optimizing...';
+        try {
+            const r = await fetch(optUrl);
+            const j = await r.json();
+            if (!j.ok) { alert('Optimize failed: ' + (j.error || 'unknown')); return; }
+            const url = j.optimized; // already a '/download/...' URL
+            // create and click hidden anchor to download
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = url.split('/').pop();
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch(err) {
+            console.error(err);
+            alert('Optimize/download failed: ' + (err.message || err));
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-download"></i>&nbsp;Optimized';
+        }
+    }
+
+
+>>>>>>> feat/decouple-db
     function openPreview(url, isVideo) {
       const body = document.getElementById('previewBody');
       body.innerHTML = '';

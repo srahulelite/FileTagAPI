@@ -209,7 +209,12 @@ __marimo__/
 
 #key
 gha-key.json
+<<<<<<< HEAD
 /backend/key.json
 # local GCP key
 /backend/filetagapi-sa.json
 /backend/filetagapi-signer-key.json
+=======
+backend/filetagapi-proxy-sa.json
+backend/cloud_sql_proxy.exe
+>>>>>>> feat/decouple-db
