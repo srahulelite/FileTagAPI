@@ -11,34 +11,23 @@ from typing import List, Optional
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from PIL import Image
-<<<<<<< HEAD
 from tags_util import add_random_tags_for_file, get_tags
 from fastapi.responses import FileResponse
 from fastapi import Header, Depends
 from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
 from fastapi import HTTPException, status
 from logs_util import log_event, init_logs_db
-=======
-from fastapi.responses import FileResponse
-from fastapi import Header, Depends
-import os
-from fastapi import HTTPException, status
->>>>>>> feat/decouple-db
 import subprocess
 import secrets
 import aiofiles
 import re
 import io
 import mimetypes
-<<<<<<< HEAD
 import os
-=======
->>>>>>> feat/decouple-db
 from storage_adapter import save_file_bytes, save_file_from_path, get_signed_url, USE_GCS
 from google.cloud import storage
 from typing import List
 
-<<<<<<< HEAD
 from pathlib import Path
 
 # ensure DB directory is used for sqlite files (persisted via volume)
@@ -48,29 +37,6 @@ DB_DIR.mkdir(parents=True, exist_ok=True)
 # (optional) read env locally
 GCS_ENABLED = USE_GCS
 
-=======
-# (optional) read env locally
-GCS_ENABLED = USE_GCS
-
-if os.getenv("DB_TYPE", "sqlite").lower() == "postgres":
-    # use Postgres adapter
-        from auth_sql import (
-        get_key_record,
-        create_api_key,
-        increment_usage_and_check,
-        init_db as auth_init_db,
-        insert_log as log_event,   # replace logs_util.log_event
-        add_random_tags_for_file,  # if your tags_util wrapper expects this name
-        get_key_record_for_company,
-        get_tags_for_file as get_tags,
-    )
-else:
-    # default: sqlite adapter (your existing auth.py)
-    from auth import get_key_record, create_api_key, increment_usage_and_check, init_db as auth_init_db
-    from logs_util import log_event, init_logs_db
-    from tags_util import add_random_tags_for_file, get_tags
-
->>>>>>> feat/decouple-db
 
 app = FastAPI(title="Upload Service")
 
@@ -78,11 +44,7 @@ app = FastAPI(title="Upload Service")
 auth_init_db()
 
 # intialize logs DB
-<<<<<<< HEAD
 init_logs_db()
-=======
-# init_logs_db()
->>>>>>> feat/decouple-db
 
 # mount static + templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -104,7 +66,6 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB max (adjust if needed)
 ALLOWED_PREFIXES = ("image/", "video/")  # optional restriction; set to () to allow any
 VIDEO_EXTS = {'.mp4', '.webm', '.ogg', '.mov', '.m4v', '.avi', '.flv', '.mkv'}
 
-<<<<<<< HEAD
 
 
 
@@ -124,8 +85,6 @@ logger.info("STARTUP: USE_GCS (env)=%s GCS_BUCKET=%s GOOGLE_APPLICATION_CREDENTI
 
 
 
-=======
->>>>>>> feat/decouple-db
 # mount the uploads folder so files are served at /uploads/...
 app.mount("/uploads", StaticFiles(directory=str(BASE_UPLOAD_DIR)), name="uploads")
 
@@ -261,7 +220,6 @@ async def upload_file(
     # Basic sanity checks
     if not survey or not user_id:
         raise HTTPException(status_code=400, detail="survey and user_id are required")
-<<<<<<< HEAD
     
 
 
@@ -279,8 +237,6 @@ async def upload_file(
 
 
 
-=======
->>>>>>> feat/decouple-db
 
     # Read file into memory chunk-by-chunk to check size and then write to disk
     contents = await file.read()
@@ -754,13 +710,8 @@ def optimize_media_and_cache(company_safe: str, survey_safe: str, filename: str,
 
 
 #http://127.0.0.1:8000/optimize/mysurvey/filename.jpg
-<<<<<<< HEAD
 # @app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
 # async def optimize_endpoint(company: str, survey: str, filename: str):
-=======
-@app.get("/api/v1/{company}/surveys/{survey}/optimize/{filename}")
-async def optimize_endpoint(company: str, survey: str, filename: str):
->>>>>>> feat/decouple-db
     survey_safe = secure_name(survey).lower()
     company_safe = secure_name(company).lower()
     try:
@@ -791,7 +742,6 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
         # return helpful message and 500 so frontend can show it
         log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"opt_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-<<<<<<< HEAD
     if optimized_url.startswith("http"):
         return RedirectResponse(url=optimized_url, status_code=302)    
     log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
@@ -898,13 +848,6 @@ async def optimize_endpoint(company: str, survey: str, filename: str):
         # catch-all to avoid returning HTML pages or unstructured responses
         log_event("ERROR", "/api/v1/{company}/surveys/{survey}/optimize", f"unexpected_error: {e}", company=company_safe, survey=survey_safe, filename=filename)
         return JSONResponse({"ok": False, "error": "unexpected error", "detail": str(e)}, status_code=500)
-=======
-        
-    log_event("INFO", "/api/v1/{company}/surveys/{survey}/optimize", f"optimized_ready {optimized_url}", company=company_safe, survey=survey_safe, filename=filename)
-    return {"ok": True, "optimized": optimized_url}
-
-
->>>>>>> feat/decouple-db
 
 
 # Simple HTML view to list files for a survey with preview and actions
@@ -1054,10 +997,6 @@ async def files_list_template(
 #     return FileResponse(path=candidate, media_type=mimetype or "application/octet-stream",
 #                         filename=candidate.name, headers={"Content-Disposition": f'attachment; filename="{candidate.name}"'})
 
-<<<<<<< HEAD
-
-=======
->>>>>>> feat/decouple-db
 @app.get("/api/v1/{company}/surveys/{survey}/download/{path:path}")
 async def download_file(company: str, survey: str, path: str):
     company_safe = secure_name(company).lower()
@@ -1073,7 +1012,6 @@ async def download_file(company: str, survey: str, path: str):
             raise HTTPException(status_code=500, detail="Server misconfigured")
 
         try:
-<<<<<<< HEAD
             # Prefer storage_adapter.get_signed_url which already implements ADC + fallback logic
             # and will use the GCP_SA_KEY fallback if ADC cannot sign.
             # storage_adapter.get_signed_url returns a string URL (or raises).
@@ -1152,34 +1090,6 @@ async def download_file(company: str, survey: str, path: str):
     #     except Exception as e:
     #         log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
     #         raise HTTPException(status_code=500, detail="Failed to generate download URL")
-=======
-            client = gcs_storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(object_path)
-
-            if not blob.exists():
-                raise HTTPException(status_code=404, detail="file not found")
-
-            # Desired filename in Content-Disposition (use actual file name)
-            filename_only = Path(path).name
-
-            # Generate a V4 signed URL with Content-Disposition forcing download
-            signed_url = blob.generate_signed_url(
-                version="v4",
-                expiration=timedelta(minutes=15),
-                method="GET",
-                response_disposition=f'attachment; filename="{filename_only}"'
-            )
-
-            # Redirect client to the signed URL so the browser downloads the file
-            return RedirectResponse(url=signed_url, status_code=302)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            log_event("ERROR", "download_file", f"gcs_signed_url_error:{e}", company=company_safe, survey=survey_safe, filename=path)
-            raise HTTPException(status_code=500, detail="Failed to generate download URL")
->>>>>>> feat/decouple-db
 
     # -----------------------
     # LOCAL MODE (unchanged, still returns FileResponse with attachment header)
