@@ -216,3 +216,6 @@ gha-key.json
 /backend/cloud_sql_proxy.exe
 /backend/uploads
 /backend/filetagapi-proxy-sa.json
+
+# local SA keys
+backend/filetagapi-proxy-sa.json
