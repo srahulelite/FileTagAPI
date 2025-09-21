@@ -209,3 +209,5 @@ __marimo__/
 
 #key
 gha-key.json
+backend/filetagapi-proxy-sa.json
+backend/cloud_sql_proxy.exe
