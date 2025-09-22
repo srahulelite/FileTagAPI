@@ -328,29 +328,36 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
                 accepts it for generating signed URLs.
                 """
                 def __init__(self, signer_email: str):
+                    # do NOT call super().__init__ with no-arg here; instead initialize internal state
+                    # and satisfy base class expectations by providing a token property with setter.
+                    # We still call base __init__ to keep behavior consistent.
                     super().__init__()
                     self._signer_email = signer_email
-                    # token storage when refreshed
                     self._token = None
 
                 @property
                 def signer_email(self) -> str:
                     return self._signer_email
 
-                # alias commonly used by google libs
                 @property
                 def service_account_email(self) -> str:
                     return self._signer_email
 
-                def refresh(self, request):
-                    # fetch and cache a token so code that expects .token works
-                    creds, _ = google.auth.default()
-                    creds.refresh(request)
-                    self._token = creds.token
-
+                # token property with setter so base class initialization (which sets token)
+                # won't fail, and external libs can read/write it.
                 @property
                 def token(self):
                     return self._token
+
+                @token.setter
+                def token(self, value):
+                    self._token = value
+
+                def refresh(self, request):
+                    # populate token for callers that expect it to exist
+                    creds, _ = google.auth.default()
+                    creds.refresh(request)
+                    self._token = creds.token
 
                 def sign_bytes(self, bytes_to_sign: bytes) -> bytes:
                     return _iam_sign_blob(self._signer_email, bytes_to_sign)
@@ -376,4 +383,5 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
     except Exception:
         logger.exception("Failed to generate signed URL for %s", blob_path)
         raise
+
 
