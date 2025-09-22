@@ -18,15 +18,43 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 MIN_CONN = int(os.getenv("DB_MIN_CONN", "1"))
 MAX_CONN = int(os.getenv("DB_MAX_CONN", "5"))
 
+
+# Cloud Run / Cloud SQL connector
+INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME")  # e.g. filetagapi-prod:asia-south1:filetagapi-sql
+
 _conn_pool = None
 
+
+def _build_conn_kwargs():
+    """
+    Return kwargs that can be passed to psycopg2.connect or SimpleConnectionPool.
+    If running with INSTANCE_CONNECTION_NAME, use unix socket host `/cloudsql/...`
+    """
+    if INSTANCE_CONNECTION_NAME:
+        # use unix socket path (no port)
+        return {
+            "user": DB_USER,
+            "password": DB_PASS,
+            "dbname": DB_NAME,
+            "host": f"/cloudsql/{INSTANCE_CONNECTION_NAME}"
+        }
+    else:
+        # traditional TCP host/port (local dev or docker)
+        return {
+            "user": DB_USER,
+            "password": DB_PASS,
+            "dbname": DB_NAME,
+            "host": DB_HOST,
+            "port": DB_PORT
+        }
+    
 def get_pool():
     global _conn_pool
     if _conn_pool is None:
+        kwargs = _build_conn_kwargs()
+        # SimpleConnectionPool will accept host as unix socket path when provided
         _conn_pool = pool.SimpleConnectionPool(
-            MIN_CONN, MAX_CONN,
-            user=DB_USER, password=DB_PASS, dbname=DB_NAME,
-            host=DB_HOST, port=DB_PORT
+            MIN_CONN, MAX_CONN, **kwargs
         )
     return _conn_pool
 

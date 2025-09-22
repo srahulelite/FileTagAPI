@@ -88,19 +88,13 @@ jobs:
           IMAGE: ${{ env.IMAGE }}
           REGION: ${{ secrets.GCP_REGION }}
           BUCKET: ${{ secrets.GCS_BUCKET }}
-          # Cloud SQL instance connection name for production - change if you want separate dev instance
-          INSTANCE: filetagapi-prod:asia-south1:filetagapi-sql
         run: |
           if [[ "${GITHUB_REF##*/}" == "main" ]]; then
             SERVICE="filetagapi-prod"
             ENVIRONMENT="prod"
-            # optionally switch INSTANCE for prod if you use separate dev instance
-            # INSTANCE="filetagapi-prod:asia-south1:filetagapi-sql"
           else
             SERVICE="filetagapi-dev"
             ENVIRONMENT="dev"
-            # if you have a separate dev Cloud SQL, change INSTANCE here:
-            # INSTANCE="filetagapi-dev:asia-south1:filetagapi-sql"
           fi
           echo "Deploying $IMAGE to $SERVICE in region ${REGION}"
           gcloud run deploy "$SERVICE" \
@@ -109,11 +103,8 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account=filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
-            --add-cloudsql-instances ${INSTANCE} \
-            --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET},INSTANCE_CONNECTION_NAME=${INSTANCE},DB_NAME=filetagapi_db,DB_USER=ft_user" \
-            --set-secrets DB_PASS=projects/${{ secrets.GCP_PROJECT }}/secrets/DB_PASS:latest \
+            --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET}" \
             --quiet
-
 
       - name: Output Cloud Run URL
         run: |

@@ -789,11 +789,7 @@
         }
 
         function isSecureContext() {
-<<<<<<< HEAD
             return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'locahost';
-=======
-            return window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
->>>>>>> feat/decouple-db
         }
 
         function resetWidgetToIdle() {
@@ -902,9 +898,9 @@
         window.CameraUploadWidget = window.CameraUploadWidget || {};
         // make sure init is available even if loaded earlier
     })();
-    const COMPANY = 'walr';    // example company code (lowercase recommended)
-    const SURVEY = 'testsurvey321'; // survey id
-    const API_KEY = '9rMdbSMR3P657TRH_BZIRE1n5uxRSzE7'; // the key you received
+    const COMPANY = 'wal4';    // example company code (lowercase recommended)
+    const SURVEY = 'Survey123'; // survey id
+    const API_KEY = 'MPYHTPGM16iWgEek9eIROFuiM_91Wo2I'; // the key you received
 
     CameraUploadWidget.init({
         allow: 'both',
