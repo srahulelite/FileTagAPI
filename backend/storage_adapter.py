@@ -233,6 +233,7 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
     import google.auth
     from google.auth.transport.requests import Request as GoogleAuthRequest
     from googleapiclient import discovery
+    from google.auth import credentials as ga_credentials
 
     company_safe = str(company).strip()
     survey_safe = str(survey).strip()
@@ -296,10 +297,9 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
                         return resp.text.strip()
                 except Exception:
                     pass
-                # google.auth.default() may not include SA email; return None so caller can fail gracefully
                 return None
 
-            def _iam_sign_blob(service_account_email: str, payload_bytes: bytes):
+            def _iam_sign_blob(service_account_email: str, payload_bytes: bytes) -> bytes:
                 """
                 Use IAMCredentials API to sign payload_bytes by the given service account.
                 Returns raw signature bytes. Requires that the runtime identity has
@@ -320,19 +320,46 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
                 signature_b64 = resp.get('signedBlob')
                 return base64.b64decode(signature_b64)
 
-            # Adapter object implementing sign_bytes expected by google-cloud-storage
-            class _IAMSigningCreds:
-                def __init__(self, sa_email):
-                    self.service_account_email = sa_email
+            # Proper credentials object implementing google.auth signing interface.
+            class _IAMSigningCredentials(ga_credentials.Credentials):
+                """
+                Minimal credentials object that implements sign_bytes via IAM signBlob.
+                This class exposes 'sign_bytes' and 'signer_email' so google-cloud-storage
+                accepts it for generating signed URLs.
+                """
+                def __init__(self, signer_email: str):
+                    super().__init__()
+                    self._signer_email = signer_email
+                    # token storage when refreshed
+                    self._token = None
+
+                @property
+                def signer_email(self) -> str:
+                    return self._signer_email
+
+                # alias commonly used by google libs
+                @property
+                def service_account_email(self) -> str:
+                    return self._signer_email
+
+                def refresh(self, request):
+                    # fetch and cache a token so code that expects .token works
+                    creds, _ = google.auth.default()
+                    creds.refresh(request)
+                    self._token = creds.token
+
+                @property
+                def token(self):
+                    return self._token
 
                 def sign_bytes(self, bytes_to_sign: bytes) -> bytes:
-                    return _iam_sign_blob(self.service_account_email, bytes_to_sign)
+                    return _iam_sign_blob(self._signer_email, bytes_to_sign)
 
             runtime_sa_email = _get_runtime_service_account_email()
             if not runtime_sa_email:
                 raise RuntimeError("Could not determine runtime service account email for IAM signing (metadata lookup failed).")
 
-            iam_creds = _IAMSigningCreds(runtime_sa_email)
+            iam_creds = _IAMSigningCredentials(runtime_sa_email)
 
             # Use v4 explicitly and pass credentials object that implements sign_bytes
             url = blob.generate_signed_url(
@@ -349,3 +376,4 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
     except Exception:
         logger.exception("Failed to generate signed URL for %s", blob_path)
         raise
+
