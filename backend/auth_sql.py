@@ -110,7 +110,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
-        # tags table
+        ## tags table
         cur.execute("""
         CREATE TABLE IF NOT EXISTS tags (
             id SERIAL PRIMARY KEY,
