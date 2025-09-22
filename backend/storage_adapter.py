@@ -213,28 +213,18 @@ def save_file_from_path(company: str, survey: str, filename: str, local_path: Pa
 
 def get_signed_url(company: str, survey: str, filename: str, expires_seconds: int = 3600):
     """
-    Generate a signed download URL for a stored object.
+    Generate a signed URL for object:
+      gs://{GCS_BUCKET}/{company}/{survey}/{filename}
 
-    Strategy (in order):
-    1) Try default blob.generate_signed_url() (works if credentials used by the process
-       include a private key, e.g. a service account JSON.)
-    2) If that fails and GCP_SA_KEY env var is set, treat it as a path or raw JSON,
-       build credentials from it and use those to sign.
-    3) If GCP_SA_KEY is not present or fails, attempt IAM signBlob via the
-       IAM Credentials API using the runtime identity (no private key in container).
-       This requires the runtime identity to have the
-       roles/iam.serviceAccountTokenCreator (or iam.serviceAccounts.signBlob) permission
-       on the signing service account.
+    Strategy:
+    1) If USE_GCS is false -> return internal download route.
+    2) Try default signing (works when credentials contain private key).
+    3) If default fails, look for GCP_SA_KEY env:
+         - if it's a path to a file, load JSON
+         - otherwise treat it as raw JSON string
+       Build service-account credentials from that JSON and use it to sign.
+    4) If everything fails, raise RuntimeError (caller will return 500).
     """
-    import os
-    import json
-    import base64
-    import requests
-    import google.auth
-    from google.auth.transport.requests import Request as GoogleAuthRequest
-    from googleapiclient import discovery
-    from google.auth import credentials as ga_credentials
-
     company_safe = str(company).strip()
     survey_safe = str(survey).strip()
     filename_safe = str(filename).strip()
@@ -248,140 +238,57 @@ def get_signed_url(company: str, survey: str, filename: str, expires_seconds: in
         blob = bucket.blob(blob_path)
         logger.info("Generating signed URL for gs://%s/%s (expires=%ds)", bucket.name, blob_path, expires_seconds)
 
-        # 1) Try default signing (works if credentials contain private key)
+        # Try 1: Default signing (works when credentials include private key)
         try:
             url = blob.generate_signed_url(expiration=timedelta(seconds=expires_seconds), version="v4")
             logger.info("Signed URL generated using default credentials")
             return url
-        except Exception as first_err:
-            logger.warning("Default generate_signed_url failed (%s). Will attempt fallback.", first_err)
+        except Exception as e_default:
+            logger.warning("Default generate_signed_url failed (%s). Will attempt fallback using GCP_SA_KEY if available.", e_default)
 
-        # 2) If GCP_SA_KEY env var is provided, attempt JSON-based signing (existing fallback)
+        # Try 2: Fallback to explicit service-account JSON from env var GCP_SA_KEY
         sa_env = os.getenv("GCP_SA_KEY")
-        if sa_env:
-            sa_info = None
-            try:
-                if os.path.exists(sa_env):
-                    logger.info("GCP_SA_KEY points to a file path; loading JSON from file")
-                    with open(sa_env, "r", encoding="utf-8") as f:
-                        sa_info = json.load(f)
-                else:
-                    logger.info("GCP_SA_KEY provided as env string of length %d", len(sa_env))
-                    sa_info = json.loads(sa_env)
-            except Exception as e:
-                raise RuntimeError(f"Failed to parse service account JSON from GCP_SA_KEY: {e}") from e
+        if not sa_env:
+            # No env secret provided — cannot sign
+            raise RuntimeError("Default credentials cannot sign URLs and GCP_SA_KEY env var not set; cannot generate signed URL.")
 
-            try:
-                sa_creds = service_account.Credentials.from_service_account_info(sa_info)
-            except Exception as e:
-                raise RuntimeError(f"Failed to build credentials from service account info: {e}") from e
-
-            try:
-                url = blob.generate_signed_url(expiration=timedelta(seconds=expires_seconds), credentials=sa_creds, version="v4")
-                logger.info("Signed URL generated using fallback service account JSON (via GCP_SA_KEY)")
-                return url
-            except Exception as e:
-                logger.exception("Fallback generate_signed_url with service account JSON failed; will attempt IAM signBlob fallback.")
-                # fallthrough to IAM fallback
-
-        # 3) IAM signBlob fallback (no private key in container)
+        # Interpret GCP_SA_KEY as either a path to a JSON file or raw JSON content
+        sa_info = None
         try:
-            logger.info("Attempting IAM signBlob fallback using runtime service account.")
+            if os.path.exists(sa_env):
+                logger.info("GCP_SA_KEY points to a file path; loading JSON from file")
+                with open(sa_env, "r", encoding="utf-8") as f:
+                    sa_info = json.load(f)
+            else:
+                # treat as raw JSON string (secret value)
+                logger.info("GCP_SA_KEY provided as raw JSON string (length=%d)", len(sa_env))
+                sa_info = json.loads(sa_env)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse service account JSON from GCP_SA_KEY: {e}") from e
 
-            # helper: find runtime service account email via metadata server (works on Cloud Run)
-            def _get_runtime_service_account_email():
-                try:
-                    md_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
-                    resp = requests.get(md_url, headers={"Metadata-Flavor": "Google"}, timeout=2)
-                    if resp.ok:
-                        return resp.text.strip()
-                except Exception:
-                    pass
-                return None
+        # Build credentials from the service account info and use it to sign
+        try:
+            sa_creds = service_account.Credentials.from_service_account_info(sa_info)
+        except Exception as e:
+            raise RuntimeError(f"Failed to build credentials from service account info: {e}") from e
 
-            def _iam_sign_blob(service_account_email: str, payload_bytes: bytes) -> bytes:
-                """
-                Use IAMCredentials API to sign payload_bytes by the given service account.
-                Returns raw signature bytes. Requires that the runtime identity has
-                iam.serviceAccounts.signBlob permission on service_account_email.
-                """
-                creds, _ = google.auth.default()
-                # ensure freshest token
-                creds.refresh(GoogleAuthRequest())
-
-                service = discovery.build('iamcredentials', 'v1', credentials=creds, cache_discovery=False)
-                name = f"projects/-/serviceAccounts/{service_account_email}"
-                payload_b64 = base64.b64encode(payload_bytes).decode('utf-8')
-                request = service.projects().serviceAccounts().signBlob(
-                    name=name,
-                    body={'payload': payload_b64}
-                )
-                resp = request.execute()
-                signature_b64 = resp.get('signedBlob')
-                return base64.b64decode(signature_b64)
-
-            # Proper credentials object implementing google.auth signing interface.
-            class _IAMSigningCredentials(ga_credentials.Credentials):
-                """
-                Minimal credentials object that implements sign_bytes via IAM signBlob.
-                This class exposes 'sign_bytes' and 'signer_email' so google-cloud-storage
-                accepts it for generating signed URLs.
-                """
-                def __init__(self, signer_email: str):
-                    # do NOT call super().__init__ with no-arg here; instead initialize internal state
-                    # and satisfy base class expectations by providing a token property with setter.
-                    # We still call base __init__ to keep behavior consistent.
-                    super().__init__()
-                    self._signer_email = signer_email
-                    self._token = None
-
-                @property
-                def signer_email(self) -> str:
-                    return self._signer_email
-
-                @property
-                def service_account_email(self) -> str:
-                    return self._signer_email
-
-                # token property with setter so base class initialization (which sets token)
-                # won't fail, and external libs can read/write it.
-                @property
-                def token(self):
-                    return self._token
-
-                @token.setter
-                def token(self, value):
-                    self._token = value
-
-                def refresh(self, request):
-                    # populate token for callers that expect it to exist
-                    creds, _ = google.auth.default()
-                    creds.refresh(request)
-                    self._token = creds.token
-
-                def sign_bytes(self, bytes_to_sign: bytes) -> bytes:
-                    return _iam_sign_blob(self._signer_email, bytes_to_sign)
-
-            runtime_sa_email = _get_runtime_service_account_email()
-            if not runtime_sa_email:
-                raise RuntimeError("Could not determine runtime service account email for IAM signing (metadata lookup failed).")
-
-            iam_creds = _IAMSigningCredentials(runtime_sa_email)
-
-            # Use v4 explicitly and pass credentials object that implements sign_bytes
+        try:
+            # Use V4 signed URL with explicit credentials that contain private key
             url = blob.generate_signed_url(
                 expiration=timedelta(seconds=expires_seconds),
-                credentials=iam_creds,
                 version="v4",
+                credentials=sa_creds
             )
-            logger.info("Signed URL generated via IAM signBlob fallback using runtime SA: %s", runtime_sa_email)
+            logger.info("Signed URL generated using service-account JSON (GCP_SA_KEY)")
             return url
         except Exception as e:
-            logger.exception("IAM signBlob fallback failed: %s", e)
-            raise RuntimeError(f"Failed to generate signed URL via IAM fallback: {e}") from e
+            logger.exception("Fallback generate_signed_url with service account JSON failed")
+            raise RuntimeError(f"Fallback generate_signed_url with service account JSON failed: {e}") from e
 
-    except Exception:
+    except Exception as final_err:
         logger.exception("Failed to generate signed URL for %s", blob_path)
+        # propagate as runtime error for caller to return 500
         raise
+
 
 
