@@ -118,6 +118,29 @@ jobs:
             --role="roles/secretmanager.secretAccessor" \
             --project="${GCP_PROJECT}"
 
+      - name: Ensure SA key secret exists (create or add version)
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+        run: |
+          SECRET_NAME="filetagapi-runner-sa-key"
+          # ${{ secrets.GCP_SA_KEY }} contains full JSON value
+          if ! gcloud secrets describe "$SECRET_NAME" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+            echo -n "${{ secrets.GCP_SA_KEY }}" | gcloud secrets create "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
+          else
+            echo -n "${{ secrets.GCP_SA_KEY }}" | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
+          fi
+
+      - name: Grant secret accessor to runtime SA
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+        run: |
+          SECRET_NAME="filetagapi-runner-sa-key"
+          RUNTIME_SA="filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com"
+          gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+            --member="serviceAccount:${RUNTIME_SA}" \
+            --role="roles/secretmanager.secretAccessor" \
+            --project="$GCP_PROJECT"
+
       - name: Deploy to Cloud Run (secret-backed DB_PASS)
         env:
           IMAGE: ${{ env.IMAGE }}
