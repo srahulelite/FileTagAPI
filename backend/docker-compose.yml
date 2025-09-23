@@ -29,7 +29,7 @@ services:
 
       DATABASE_USER: ft_user
       DATABASE_PASSWORD: "root@123"
-      PGPASSWORD: "root@123"            # add this
+      PGPASSWORD: "root@123"            ## add this
       DB_PASSWORD: "root@123"          # extra fallback
 
       DATABASE_NAME: filetagapi_db
