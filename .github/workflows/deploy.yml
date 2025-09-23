@@ -167,6 +167,7 @@ jobs:
             --add-cloudsql-instances ${INSTANCE} \
             --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET},INSTANCE_CONNECTION_NAME=${INSTANCE},DB_NAME=filetagapi_db,DB_USER=ft_user" \
             --set-secrets="DB_PASS=filetagapi-db-pass:latest" \
+            --set-secrets="GCP_SA_KEY=filetagapi-runner-sa-key:latest" \
             --quiet
 
 
