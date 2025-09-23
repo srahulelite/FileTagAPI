@@ -83,71 +83,11 @@ jobs:
           cd backend
           docker push "${{ env.IMAGE }}"
 
-      - name: Ensure Secret exists (create or add version)
-        env:
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-        run: |
-          SECRET_NAME="filetagapi-db-pass"
-
-          # If secret doesn't exist, create it. Otherwise add a new version.
-          if ! gcloud secrets describe "$SECRET_NAME" --project="${GCP_PROJECT}" >/dev/null 2>&1; then
-            # Use single quotes so any special chars in secret are preserved safely
-            printf '%s' '${{ secrets.DB_PASS }}' | gcloud secrets create "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
-          else
-            printf '%s' '${{ secrets.DB_PASS }}' | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
-          fi
-
-      - name: Grant Secret Accessor to deployer & runtime SA
-        env:
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-        run: |
-          SECRET_NAME="filetagapi-db-pass"
-          DEPLOYER_SA="filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com"
-          # Runtime SA — replace if you use a custom runtime SA, otherwise Cloud Run default service account will be used at runtime.
-          RUNTIME_SA="${DEPLOYER_SA}" # or a separate runtime SA if you have one
-
-          # grant deployer SA ability to add/read secret versions (deploy step needs this sometimes)
-          gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
-            --member="serviceAccount:${DEPLOYER_SA}" \
-            --role="roles/secretmanager.secretAccessor" \
-            --project="${GCP_PROJECT}"
-
-          # grant runtime SA access so the container can read the secret at runtime
-          gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
-            --member="serviceAccount:${RUNTIME_SA}" \
-            --role="roles/secretmanager.secretAccessor" \
-            --project="${GCP_PROJECT}"
-
-      - name: Ensure SA key secret exists (create or add version)
-        env:
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-        run: |
-          SECRET_NAME="filetagapi-runner-sa-key"
-          # Note: we use printf with single-quoted expansion to avoid double-quote collisions
-          if ! gcloud secrets describe "$SECRET_NAME" --project="$GCP_PROJECT" >/dev/null 2>&1; then
-            printf '%s' '${{ secrets.GCP_SA_KEY }}' | gcloud secrets create "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
-          else
-            printf '%s' '${{ secrets.GCP_SA_KEY }}' | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
-          fi
-
-      - name: Grant secret accessor to runtime SA
-        env:
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-        run: |
-          SECRET_NAME="filetagapi-runner-sa-key"
-          RUNTIME_SA="filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com"
-          gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
-            --member="serviceAccount:${RUNTIME_SA}" \
-            --role="roles/secretmanager.secretAccessor" \
-            --project="$GCP_PROJECT"
-
-      - name: Deploy to Cloud Run (secret-backed DB_PASS)
+      - name: Deploy to Cloud Run
         env:
           IMAGE: ${{ env.IMAGE }}
           REGION: ${{ secrets.GCP_REGION }}
           BUCKET: ${{ secrets.GCS_BUCKET }}
-          INSTANCE: filetagapi-prod:asia-south1:filetagapi-sql
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
           if [[ "${GITHUB_REF##*/}" == "main" ]]; then
             SERVICE="filetagapi-prod"
@@ -156,21 +96,15 @@ jobs:
             SERVICE="filetagapi-dev"
             ENVIRONMENT="dev"
           fi
-
           echo "Deploying $IMAGE to $SERVICE in region ${REGION}"
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$REGION" \
             --platform managed \
             --allow-unauthenticated \
-            --service-account=filetagapi-runner-sa@${GCP_PROJECT}.iam.gserviceaccount.com \
-            --add-cloudsql-instances ${INSTANCE} \
-            --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET},INSTANCE_CONNECTION_NAME=${INSTANCE},DB_NAME=filetagapi_db,DB_USER=ft_user" \
-            --set-secrets="DB_PASS=filetagapi-db-pass:latest" \
-            --set-secrets="GCP_SA_KEY=filetagapi-runner-sa-key:latest" \
+            --service-account=filetagapi-runner-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
+            --set-env-vars="ENV=${ENVIRONMENT},USE_GCS=1,GCS_BUCKET=${BUCKET}" \
             --quiet
-
-
 
       - name: Output Cloud Run URL
         run: |

@@ -13,11 +13,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 
+# ensure required directories exist in the image (prevents runtime error if they get excluded)
+RUN mkdir -p /app/static /app/templates && chown -R root:root /app/static /app/templates
+
 # create uploads dir
 RUN mkdir -p /app/uploads
 VOLUME ["/app/uploads"]
 
-ENV PORT=8080
+ENV PORT=8000
 EXPOSE ${PORT}
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
