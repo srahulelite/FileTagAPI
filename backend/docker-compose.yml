@@ -1,27 +1,52 @@
 version: "3.8"
 
 services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "8000:8080"                       # host:container
-    environment:
-      PORT: "8080"
-      ENV: "prod"
-      GCS_ENABLED: "true"                 # enable GCS mode
-      GCS_BUCKET: "filetagapi-uploads-filetagapi-prod"
-      # If you use a mounted JSON key (less recommended), uncomment next line:
-      # GOOGLE_APPLICATION_CREDENTIALS: "/secrets/gcp/key.json"
+  cloudsql-proxy:
+    image: gcr.io/cloudsql-docker/gce-proxy:1.33.3
+    command: >
+      /cloud_sql_proxy
+      -instances=filetagapi-prod:asia-south1:filetagapi-sql=tcp:0.0.0.0:5432
+      -credential_file=/secrets/sa-key.json
     volumes:
-      - /srv/filetagapi/uploads:/app/uploads   # persistent uploads and DBs (matches your code)
-      # optional secret mount (uncomment if you use JSON key)
-      # - /srv/filetagapi/secrets/key.json:/secrets/gcp/key.json:ro
+      - C:\gcp-keys\filetagapi-runner-sa.json:/secrets/sa-key.json:ro
+    ports:
+      - "5432:5432"
     restart: unless-stopped
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/healthz || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+
+
+  app:
+    image: filetagapi-dev:local
+    container_name: filetagapi-dev
+    depends_on:
+      - cloudsql-proxy
+    environment:
+      DATABASE_HOST: cloudsql-proxy
+      PGHOST: cloudsql-proxy
+      DB_HOST: cloudsql-proxy
+
+      DATABASE_PORT: "5432"
+      PGPORT: "5432"
+
+      DATABASE_USER: ft_user
+      DATABASE_PASSWORD: "root@123"
+      PGPASSWORD: "root@123"            # add this
+      DB_PASSWORD: "root@123"          # extra fallback
+
+      DATABASE_NAME: filetagapi_db
+      BUCKET_NAME: filetagapi-uploads-filetagapi-prod
+      USE_GCS: "true"
+      GCS_ENABLED: "true"              # redundant but safe
+      GCS_BUCKET: "filetagapi-uploads-filetagapi-prod"
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/sa-key.json
+
+    volumes:
+      - ./:/app:delegated
+      - C:\gcp-keys\filetagapi-runner-sa.json:/secrets/sa-key.json:ro
+
+    # wait for proxy a few seconds before starting the app (avoids race)
+    command: sh -c "sleep 5 && uvicorn app:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    restart: on-failure
+
+
