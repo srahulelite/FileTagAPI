@@ -87,14 +87,14 @@ jobs:
         env:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
-          # secret name we'll use in GCP
           SECRET_NAME="filetagapi-db-pass"
 
           # If secret doesn't exist, create it. Otherwise add a new version.
           if ! gcloud secrets describe "$SECRET_NAME" --project="${GCP_PROJECT}" >/dev/null 2>&1; then
-            echo -n "${{ secrets.DB_PASS }}" | gcloud secrets create "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
+            # Use single quotes so any special chars in secret are preserved safely
+            printf '%s' '${{ secrets.DB_PASS }}' | gcloud secrets create "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
           else
-            echo -n "${{ secrets.DB_PASS }}" | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
+            printf '%s' '${{ secrets.DB_PASS }}' | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="${GCP_PROJECT}"
           fi
 
       - name: Grant Secret Accessor to deployer & runtime SA
@@ -123,11 +123,11 @@ jobs:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
           SECRET_NAME="filetagapi-runner-sa-key"
-          # ${{ secrets.GCP_SA_KEY }} contains full JSON value
+          # Note: we use printf with single-quoted expansion to avoid double-quote collisions
           if ! gcloud secrets describe "$SECRET_NAME" --project="$GCP_PROJECT" >/dev/null 2>&1; then
-            echo -n "${{ secrets.GCP_SA_KEY }}" | gcloud secrets create "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
+            printf '%s' '${{ secrets.GCP_SA_KEY }}' | gcloud secrets create "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
           else
-            echo -n "${{ secrets.GCP_SA_KEY }}" | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
+            printf '%s' '${{ secrets.GCP_SA_KEY }}' | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="$GCP_PROJECT"
           fi
 
       - name: Grant secret accessor to runtime SA
